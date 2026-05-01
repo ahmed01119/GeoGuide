@@ -1,0 +1,129 @@
+import 'package:cloud_firestore/cloud_firestore.dart' hide Settings;
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
+import 'package:geoguide/cache/cache-helper.dart';
+import 'package:geoguide/constants/app_injector.dart';
+import 'package:geoguide/cubit/user_cubit.dart';
+import 'package:geoguide/firebase_options.dart';
+import 'package:geoguide/presntation/createcity.dart';
+import 'package:geoguide/presntation/screens/home-screen/home.dart';
+import 'package:geoguide/presntation/screens/login%20screen/login.dart';
+import 'package:geoguide/presntation/screens/onboarding.dart';
+import 'package:geoguide/presntation/screens/password_configuration/forgot_password.dart';
+import 'package:geoguide/presntation/screens/password_configuration/reset_password.dart';
+import 'package:geoguide/presntation/screens/profile-screen/profile.dart';
+import 'package:geoguide/presntation/screens/settings-screen/settings.dart';
+import 'package:geoguide/presntation/screens/signup-screen/signup.dart';
+import 'package:geoguide/presntation/screens/signup-screen/verify_email_screen.dart';
+import 'package:geoguide/services/auth_service.dart';
+
+import 'package:geoguide/utils/city_seader.dart';
+
+Future<void> clearBadImageLinksFromFirestore() async {
+  final snapshot =
+      await FirebaseFirestore.instance.collection('landmarks').get();
+
+  for (final doc in snapshot.docs) {
+    final data = doc.data();
+
+    final imageUrl = (data['imageUrl'] ?? '').toString();
+    final mediaUrls = List<String>.from(data['mediaUrls'] ?? []);
+
+    final hasBadMain = imageUrl.contains('loremflickr.com');
+
+    final cleanedMedia = mediaUrls
+        .where((u) => !u.toString().contains('loremflickr.com'))
+        .toList();
+
+    await doc.reference.update({
+      if (hasBadMain) 'imageUrl': FieldValue.delete(),
+      'mediaUrls': cleanedMedia,
+      'imagesRefreshedAt': FieldValue.delete(),
+    });
+  }
+
+  print('Bad loremflickr links removed ✅');
+}
+Future<void> clearImagesFromFirestore() async {
+  final snapshot =
+      await FirebaseFirestore.instance.collection('landmarks').get();
+
+  for (final doc in snapshot.docs) {
+    await doc.reference.update({
+      'imageUrl': FieldValue.delete(),
+      'mediaUrls': FieldValue.delete(),
+      'imagesRefreshedAt': FieldValue.delete(),
+    });
+  }
+
+  print('Images + refresh timestamps cleared safely ✅');
+}
+
+Future<void> main() async {
+  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } on FirebaseException catch (e) {
+    if (e.code != 'duplicate-app') rethrow;
+  }
+
+  await CacheHelper.init();
+
+  final isSeeded = await CacheHelper.getData(key: 'seeded') ?? false;
+
+  if (!isSeeded) {
+    await CitySeeder.seedIfEmpty();
+    await CacheHelper.saveData(key: 'seeded', value: true);
+  }
+
+  runApp(
+    MultiBlocProvider(
+      providers: [
+        BlocProvider(create: (_) => UserCubit(AuthService())),
+        BlocProvider(create: (_) => AppInjector.buildPlacesCubit()),
+      ],
+      child: const GeoGuideApp(),
+    ),
+  );
+}
+
+class GeoGuideApp extends StatefulWidget {
+  const GeoGuideApp({super.key});
+
+  @override
+  State<GeoGuideApp> createState() => _GeoGuideAppState();
+}
+
+class _GeoGuideAppState extends State<GeoGuideApp> {
+  @override
+  void initState() {
+    super.initState();
+    FlutterNativeSplash.remove();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      initialRoute: Onboarding.routeName,
+      routes: {
+        Onboarding.routeName: (context) => const Onboarding(),
+        Login.routeName: (context) => Login(),
+        Home.routeName: (context) => const Home(),
+        Signup.routeName: (context) => Signup(),
+        ForgotPassword.routeName: (context) => ForgotPassword(),
+        ResetPassword.routeName: (context) => ResetPassword(),
+        Profile.routeName: (context) => Profile(),
+        Settings.routeName: (context) => Settings(),
+        CreateCity.routeName: (context) => const CreateCity(),
+        VerifyEmailScreen.routeName: (_) => const VerifyEmailScreen(),
+      },
+    );
+  }
+}

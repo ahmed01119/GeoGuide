@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "220783516120",
+    "firebase_url": "https://geoguideapp-21d6e-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "geoguideapp-21d6e",
+    "storage_bucket": "geoguideapp-21d6e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:220783516120:android:1d3ad5989acfa3b824faad",
+        "android_client_info": {
+          "package_name": "com.example.geoguide"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "220783516120-k63eiob7tusmq0h8670gh09d3rkuvdle.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.geoguide",
+            "certificate_hash": "ff03b21c9adf76cf6986215c9f4f0e0edcc4467d"
+          }
+        },
+        {
+          "client_id": "220783516120-pham5r78h9sjcotdtbrjcpc5vtsgcn2v.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9yUJVACx4wnC3rT8T3BqsXpVoaxYlbJo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "220783516120-pham5r78h9sjcotdtbrjcpc5vtsgcn2v.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
