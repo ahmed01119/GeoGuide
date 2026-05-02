@@ -749,9 +749,7 @@ Future<void> _openCamera() async {
                                 context,
                                 MaterialPageRoute(
                                   builder: (_) {
-  final placesToShow = _selectedCity != null
-      ? _touristAndOutingOnly(_cityLandmarks)
-      : _touristAndOutingOnly(_allLandmarks);
+  final placesToShow = _touristAndOutingOnly(_allLandmarks);
 
   placesToShow.sort(
     (a, b) => _placeScore(b).compareTo(_placeScore(a)),
