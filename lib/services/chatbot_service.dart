@@ -5,17 +5,20 @@ import 'package:http/http.dart' as http;
 
 class ChatbotService {
   // غيري ده لـ IPv4 بتاع اللابتوب لو هتشغلي على موبايل حقيقي
-  static const String _laptopIp = '192.168.1.6';
+  // static const String _laptopIp = '192.168.1.6';
 
-  static String get _newAiBaseUrl {
-    if (kIsWeb) return 'http://localhost:3000';
+  // static String get _newAiBaseUrl {
+  //   if (kIsWeb) return 'http://localhost:3000';
 
-    // Android Emulator:
-    return 'http://10.0.2.2:3000';
+  //   // Android Emulator:
+  //   return 'http://10.0.2.2:3000';
 
-    // Real phone:
-    // return 'http://$_laptopIp:3000';
-  }
+  //   // Real phone:
+  //   // return 'http://$_laptopIp:3000';
+  // }
+
+static const String _newAiBaseUrl =
+    "https://Mostafa1249687-geoguide-api.hf.space";
 
   static String get _oldFlaskBaseUrl {
     if (kIsWeb) return 'http://localhost:1234';

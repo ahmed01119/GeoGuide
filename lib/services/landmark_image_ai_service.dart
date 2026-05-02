@@ -39,20 +39,21 @@ class AiImageDetails {
 }
 
 class LandmarkImageAiService {
-    static const String laptopIp = '192.168.1.6'; // غيريه لـ IP جهازك
+  //   static const String laptopIp = '192.168.1.6'; // غيريه لـ IP جهازك
 
-  static String get baseUrl {
-    if (kIsWeb) {
-      return 'http://localhost:3000';
-    }
+  // static String get baseUrl {
+  //   if (kIsWeb) {
+  //     return 'http://localhost:3000';
+  //   }
 
-    // Android Emulator
-    return 'http://10.0.2.2:3000';
+  //   // Android Emulator
+  //   return 'http://10.0.2.2:3000';
 
-    // Real Android/iPhone device
-    //return 'http://$laptopIp:3000';
-  }
-
+  //   // Real Android/iPhone device
+  //   //return 'http://$laptopIp:3000';
+  // }
+static const String baseUrl =
+    "https://Mostafa1249687-geoguide-api.hf.space";
   Future<AiImageDetails> describeImage(XFile imageFile) async {
     final bytes = await imageFile.readAsBytes();
     final base64Image = base64Encode(bytes);
