@@ -186,7 +186,10 @@ class _ProfileState extends State<Profile> {
                             ),
                           ),
                           const SizedBox(height: 24),
-                          UserProfileHeader(user: user),
+                          UserProfileHeader(
+                            user: user,
+                            imageUrl: state.imageUrl,
+                          ),
                         ],
                       ),
                     ),
@@ -268,7 +271,8 @@ class _ProfileState extends State<Profile> {
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        builder: (_) => const SavedAiImagesPage(),
+                                        builder: (_) =>
+                                            const SavedAiImagesPage(),
                                       ),
                                     );
                                   },

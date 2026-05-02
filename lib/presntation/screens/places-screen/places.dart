@@ -15,9 +15,33 @@ class Places extends StatelessWidget {
     this.isAdmin = false,
   });
 
+  static double _r(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
     const themeBg = Color(0xFFF7F1EB);
+
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    final width = size.width;
+    final height = size.height;
+    final shortest = size.shortestSide;
+    final isTablet = shortest >= 600;
+
+    final horizontalPadding = _r(width * 0.043, 14, 24);
+    final headerHeight = isTablet
+    ? _r(height * 0.22, 300, 380)
+    : _r(height * 0.20, 270, 330);
+
+    final glassPadding = _r(width * 0.043, 14, 20);
+    final glassTop = media.padding.top + 72;
+    final glassBottom = _r(height * 0.022, 18, 26);
+
+    final sectionTopPadding = _r(height * 0.015, 10, 16);
+    final sectionBottomPadding = _r(height * 0.030, 22, 32);
+    final listGap = _r(height * 0.017, 14, 20);
 
     return Scaffold(
       backgroundColor: themeBg,
@@ -25,10 +49,9 @@ class Places extends StatelessWidget {
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverAppBar(
-            expandedHeight: 235,
+            expandedHeight: headerHeight,
             pinned: true,
             stretch: true,
-            backgroundColor: const Color(0xFF8D6E63),
             leading: Padding(
               padding: const EdgeInsets.all(8),
               child: _GlassIconButton(
@@ -36,6 +59,7 @@ class Places extends StatelessWidget {
                 onTap: () => Navigator.pop(context),
               ),
             ),
+            backgroundColor: const Color(0xFF8D6E63),
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -68,16 +92,23 @@ class Places extends StatelessWidget {
                       ),
                     ),
                   ),
+
+                 
+
                   Positioned(
-                    left: 16,
-                    right: 16,
-                    bottom: 22,
+                    left: horizontalPadding,
+                    right: horizontalPadding,
+                    
+                    bottom: _r(height * 0.018, 14, 22),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                         child: Container(
-                          padding: const EdgeInsets.all(16),
+                          padding:EdgeInsets.symmetric(
+    horizontal: glassPadding,
+    vertical: glassPadding * 0.6, 
+  ),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.14),
                             borderRadius: BorderRadius.circular(24),
@@ -85,51 +116,84 @@ class Places extends StatelessWidget {
                               color: Colors.white.withOpacity(0.22),
                             ),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 7,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.16),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: const Text(
-                                  'Explore Egypt',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: .4,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact = constraints.maxWidth < 360;
+                              final titleSize = compact
+                                  ? _r(width * 0.060, 22, 25)
+                                  : _r(width * 0.064, 24, 28);
+                              final subtitleSize =
+                                  _r(width * 0.034, 12.5, 14);
+                              final badgeSize = _r(width * 0.030, 11.5, 12.5);
+
+                              return FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: constraints.maxWidth,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal:
+                                              _r(width * 0.032, 11, 13),
+                                          vertical: _r(height * 0.008, 6, 8),
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.16),
+                                          borderRadius:
+                                              BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          'Explore Egypt',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: badgeSize,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: .4,
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        height: _r(height * 0.014, 10, 14),
+                                      ),
+                                      Text(
+                                        'All places\nin one screen',
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: titleSize,
+                                          height: 1.12,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        height: _r(height * 0.010, 7, 10),
+                                      ),
+                                      Text(
+                                        places.isEmpty
+                                            ? 'No places available right now.'
+                                            : 'Browse ${places.length} place${places.length > 1 ? 's' : ''} and open any card for full details.',
+                                        maxLines: compact ? 3 : 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.92),
+                                          fontSize: subtitleSize,
+                                          height: 1.45,
+                                          fontWeight: FontWeight.w400,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'All places\nin one screen',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 26,
-                                  height: 1.12,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                places.isEmpty
-                                    ? 'No places available right now.'
-                                    : 'Browse ${places.length} place${places.length > 1 ? 's' : ''} and open any card for full details.',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.92),
-                                  fontSize: 13.5,
-                                  height: 1.45,
-                                  fontWeight: FontWeight.w400,
-                                ),
-                              ),
-                            ],
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -139,10 +203,9 @@ class Places extends StatelessWidget {
               ),
             ),
           ),
-
           SliverToBoxAdapter(
             child: Transform.translate(
-              offset: const Offset(0, -10),
+              offset: const Offset(0, -8),
               child: Container(
                 decoration: const BoxDecoration(
                   color: themeBg,
@@ -151,7 +214,12 @@ class Places extends StatelessWidget {
                   ),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPadding,
+                    sectionTopPadding,
+                    horizontalPadding,
+                    sectionBottomPadding,
+                  ),
                   child: places.isEmpty
                       ? const _EmptyState()
                       : Column(
@@ -162,7 +230,7 @@ class Places extends StatelessWidget {
                               subtitle:
                                   'Tap any place to open photos, history, details, and more.',
                             ),
-                            const SizedBox(height: 16),
+                            SizedBox(height: listGap),
 
                             /// مهم: ListView جوه Column لازم shrinkWrap + never scroll
                             ListView.separated(
@@ -170,7 +238,7 @@ class Places extends StatelessWidget {
                               physics: const NeverScrollableScrollPhysics(),
                               itemCount: places.length,
                               separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 14),
+                                  SizedBox(height: listGap),
                               itemBuilder: (context, index) {
                                 final place = places[index];
                                 return _PlaceListCard(
@@ -210,6 +278,10 @@ class _PlaceListCard extends StatelessWidget {
     required this.onTap,
   });
 
+  static double _r(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   String get _imageUrl {
     if (place.imageUrl.trim().isNotEmpty) return place.imageUrl.trim();
 
@@ -237,6 +309,16 @@ class _PlaceListCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final width = media.size.width;
+    final height = media.size.height;
+
+    final imageHeight = _r(height * 0.215, 170, 230);
+    final cardPadding = _r(width * 0.038, 14, 20);
+    final titleSize = _r(width * 0.046, 17, 20);
+    final descriptionSize = _r(width * 0.033, 12.5, 14);
+    final addressSize = _r(width * 0.032, 12, 13.5);
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -262,7 +344,7 @@ class _PlaceListCard extends StatelessWidget {
                   top: Radius.circular(24),
                 ),
                 child: SizedBox(
-                  height: 180,
+                  height: imageHeight,
                   width: double.infinity,
                   child: _imageUrl.isEmpty
                       ? const _Placeholder()
@@ -285,7 +367,7 @@ class _PlaceListCard extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(14),
+                padding: EdgeInsets.all(cardPadding),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -318,37 +400,37 @@ class _PlaceListCard extends StatelessWidget {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: _r(height * 0.014, 10, 14)),
                     Text(
                       place.name,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 18,
+                      style: TextStyle(
+                        fontSize: titleSize,
                         height: 1.2,
                         fontWeight: FontWeight.w800,
-                        color: Color(0xFF2E251F),
+                        color: const Color(0xFF2E251F),
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    SizedBox(height: _r(height * 0.010, 7, 10)),
                     Text(
                       _description,
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Color(0xFF6C625B),
+                      style: TextStyle(
+                        fontSize: descriptionSize,
+                        color: const Color(0xFF6C625B),
                         height: 1.5,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    SizedBox(height: _r(height * 0.014, 10, 14)),
                     Row(
                       children: [
                         if (place.address.trim().isNotEmpty) ...[
-                          const Icon(
+                          Icon(
                             Icons.place_outlined,
-                            size: 16,
-                            color: Color(0xFF8D6E63),
+                            size: _r(width * 0.041, 15, 18),
+                            color: const Color(0xFF8D6E63),
                           ),
                           const SizedBox(width: 4),
                           Expanded(
@@ -356,19 +438,19 @@ class _PlaceListCard extends StatelessWidget {
                               place.address,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 12.5,
-                                color: Color(0xFF8D6E63),
+                              style: TextStyle(
+                                fontSize: addressSize,
+                                color: const Color(0xFF8D6E63),
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
                         ],
                         const SizedBox(width: 10),
-                        const Icon(
+                        Icon(
                           Icons.arrow_forward_ios_rounded,
-                          size: 16,
-                          color: Color(0xFF8D6E63),
+                          size: _r(width * 0.041, 15, 18),
+                          color: const Color(0xFF8D6E63),
                         ),
                       ],
                     ),
@@ -392,10 +474,19 @@ class _MiniPill extends StatelessWidget {
     required this.label,
   });
 
+  static double _r(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: _r(width * 0.026, 9, 11),
+        vertical: _r(width * 0.015, 5, 7),
+      ),
       decoration: BoxDecoration(
         color: const Color(0xFFF4ECE5),
         borderRadius: BorderRadius.circular(999),
@@ -403,14 +494,18 @@ class _MiniPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 13, color: const Color(0xFF8D6E63)),
+          Icon(
+            icon,
+            size: _r(width * 0.033, 12, 14),
+            color: const Color(0xFF8D6E63),
+          ),
           const SizedBox(width: 5),
           Text(
             label,
-            style: const TextStyle(
-              fontSize: 10.8,
+            style: TextStyle(
+              fontSize: _r(width * 0.028, 10.5, 12),
               fontWeight: FontWeight.w700,
-              color: Color(0xFF8D6E63),
+              color: const Color(0xFF8D6E63),
             ),
           ),
         ],
@@ -471,25 +566,33 @@ class _SectionHeader extends StatelessWidget {
     required this.subtitle,
   });
 
+  static double _r(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style: const TextStyle(
-            fontSize: 20,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: _r(width * 0.052, 19, 22),
             fontWeight: FontWeight.w800,
-            color: Color(0xFF2E251F),
+            color: const Color(0xFF2E251F),
           ),
         ),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          style: const TextStyle(
-            fontSize: 12.5,
-            color: Color(0xFF81756C),
+          style: TextStyle(
+            fontSize: _r(width * 0.033, 12.5, 14),
+            color: const Color(0xFF81756C),
             height: 1.5,
           ),
         ),
@@ -501,24 +604,30 @@ class _SectionHeader extends StatelessWidget {
 class _Placeholder extends StatelessWidget {
   const _Placeholder();
 
+  static double _r(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+
     return Container(
       color: const Color(0xFFE9E1D9),
-      child: const Column(
+      child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.image_not_supported_outlined,
-            size: 34,
-            color: Color(0xFF9A918B),
+            size: _r(width * 0.086, 30, 38),
+            color: const Color(0xFF9A918B),
           ),
-          SizedBox(height: 6),
+          const SizedBox(height: 6),
           Text(
             'No image available',
             style: TextStyle(
-              color: Color(0xFF9A918B),
-              fontSize: 11,
+              color: const Color(0xFF9A918B),
+              fontSize: _r(width * 0.028, 10.5, 12),
             ),
           ),
         ],
@@ -530,11 +639,22 @@ class _Placeholder extends StatelessWidget {
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
 
+  static double _r(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final width = media.size.width;
+    final height = media.size.height;
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+      padding: EdgeInsets.symmetric(
+        vertical: _r(height * 0.044, 32, 42),
+        horizontal: _r(width * 0.053, 18, 24),
+      ),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
@@ -546,39 +666,39 @@ class _EmptyState extends StatelessWidget {
           ),
         ],
       ),
-      child: const Column(
+      child: Column(
         children: [
           SizedBox(
-            width: 72,
-            height: 72,
+            width: _r(width * 0.18, 68, 82),
+            height: _r(width * 0.18, 68, 82),
             child: DecoratedBox(
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: Color(0xFFF4ECE5),
                 borderRadius: BorderRadius.all(Radius.circular(20)),
               ),
               child: Icon(
                 Icons.travel_explore_rounded,
-                size: 34,
-                color: Color(0xFF8D6E63),
+                size: _r(width * 0.086, 32, 38),
+                color: const Color(0xFF8D6E63),
               ),
             ),
           ),
-          SizedBox(height: 14),
+          SizedBox(height: _r(height * 0.017, 12, 16)),
           Text(
             'No places found',
             style: TextStyle(
-              color: Color(0xFF2E251F),
-              fontSize: 18,
+              color: const Color(0xFF2E251F),
+              fontSize: _r(width * 0.046, 17, 20),
               fontWeight: FontWeight.w800,
             ),
           ),
-          SizedBox(height: 8),
+          SizedBox(height: _r(height * 0.010, 7, 10)),
           Text(
             'There are no places to show right now.',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF81756C),
-              fontSize: 13,
+              color: const Color(0xFF81756C),
+              fontSize: _r(width * 0.033, 12.5, 14),
               height: 1.5,
             ),
           ),

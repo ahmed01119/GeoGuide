@@ -44,21 +44,18 @@ class FirebaseService {
   // ──────────────────────────────────────────────────────────────
 
   String buildSavedAiImageKey({
-    required String imageBase64,
-    required AiImageDetails details,
-  }) {
-    final cleanTitle = details.title.trim().toLowerCase();
-    final cleanLocation = details.location.trim().toLowerCase();
-    final prefix = imageBase64.length > 80 ? imageBase64.substring(0, 80) : imageBase64;
-    final raw = '$cleanTitle|$cleanLocation|$prefix';
+  required String imageBase64,
+  required AiImageDetails details,
+}) {
+  final raw = '${imageBase64.length}|${imageBase64.substring(0, imageBase64.length > 200 ? 200 : imageBase64.length)}';
 
-    int hash = 0;
-    for (final unit in raw.codeUnits) {
-      hash = (hash * 31 + unit) & 0x7fffffff;
-    }
-
-    return 'ai_$hash';
+  int hash = 0;
+  for (final unit in raw.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7fffffff;
   }
+
+  return 'ai_$hash';
+}
 
   Future<void> saveAiImage({
     required String saveKey,

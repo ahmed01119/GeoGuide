@@ -18,12 +18,10 @@ import 'package:geoguide/presntation/screens/settings-screen/settings.dart';
 import 'package:geoguide/presntation/screens/signup-screen/signup.dart';
 import 'package:geoguide/presntation/screens/signup-screen/verify_email_screen.dart';
 import 'package:geoguide/services/auth_service.dart';
-
 import 'package:geoguide/utils/city_seader.dart';
 
 Future<void> clearBadImageLinksFromFirestore() async {
-  final snapshot =
-      await FirebaseFirestore.instance.collection('landmarks').get();
+  final snapshot = await FirebaseFirestore.instance.collection('landmarks').get();
 
   for (final doc in snapshot.docs) {
     final data = doc.data();
@@ -44,11 +42,11 @@ Future<void> clearBadImageLinksFromFirestore() async {
     });
   }
 
-  print('Bad loremflickr links removed ✅');
+  debugPrint('Bad loremflickr links removed ✅');
 }
+
 Future<void> clearImagesFromFirestore() async {
-  final snapshot =
-      await FirebaseFirestore.instance.collection('landmarks').get();
+  final snapshot = await FirebaseFirestore.instance.collection('landmarks').get();
 
   for (final doc in snapshot.docs) {
     await doc.reference.update({
@@ -58,7 +56,7 @@ Future<void> clearImagesFromFirestore() async {
     });
   }
 
-  print('Images + refresh timestamps cleared safely ✅');
+  debugPrint('Images + refresh timestamps cleared safely ✅');
 }
 
 Future<void> main() async {
@@ -82,6 +80,8 @@ Future<void> main() async {
     await CacheHelper.saveData(key: 'seeded', value: true);
   }
 
+  FlutterNativeSplash.remove();
+
   runApp(
     MultiBlocProvider(
       providers: [
@@ -93,19 +93,8 @@ Future<void> main() async {
   );
 }
 
-class GeoGuideApp extends StatefulWidget {
+class GeoGuideApp extends StatelessWidget {
   const GeoGuideApp({super.key});
-
-  @override
-  State<GeoGuideApp> createState() => _GeoGuideAppState();
-}
-
-class _GeoGuideAppState extends State<GeoGuideApp> {
-  @override
-  void initState() {
-    super.initState();
-    FlutterNativeSplash.remove();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,15 +102,15 @@ class _GeoGuideAppState extends State<GeoGuideApp> {
       debugShowCheckedModeBanner: false,
       initialRoute: Onboarding.routeName,
       routes: {
-        Onboarding.routeName: (context) => const Onboarding(),
-        Login.routeName: (context) => Login(),
-        Home.routeName: (context) => const Home(),
-        Signup.routeName: (context) => Signup(),
-        ForgotPassword.routeName: (context) => ForgotPassword(),
-        ResetPassword.routeName: (context) => ResetPassword(),
-        Profile.routeName: (context) => Profile(),
-        Settings.routeName: (context) => Settings(),
-        CreateCity.routeName: (context) => const CreateCity(),
+        Onboarding.routeName: (_) => const Onboarding(),
+        Login.routeName: (_) => Login(),
+        Home.routeName: (_) => const Home(),
+        Signup.routeName: (_) => Signup(),
+        ForgotPassword.routeName: (_) => ForgotPassword(),
+        ResetPassword.routeName: (_) => ResetPassword(),
+        Profile.routeName: (_) => const Profile(),
+        Settings.routeName: (_) => const Settings(),
+        CreateCity.routeName: (_) => const CreateCity(),
         VerifyEmailScreen.routeName: (_) => const VerifyEmailScreen(),
       },
     );

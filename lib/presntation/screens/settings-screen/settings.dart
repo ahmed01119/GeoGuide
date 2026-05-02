@@ -1,4 +1,5 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geoguide/constants/app_text.dart';
@@ -11,10 +12,39 @@ class Settings extends StatelessWidget {
 
   const Settings({super.key});
 
+  double _clampDouble(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
     final cubit = context.watch<UserCubit>();
     const themeBg = Color(0xFFF7F1EB);
+
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    final width = size.width;
+    final height = size.height;
+    final shortest = size.shortestSide;
+
+    final isTablet = shortest >= 600;
+
+    final horizontalPadding = _clampDouble(width * 0.043, 14, 24);
+    final contentPadding = _clampDouble(width * 0.043, 14, 22);
+    final headerHeight = isTablet
+        ? _clampDouble(height * 0.34, 310, 390)
+        : _clampDouble(height * 0.31, 250, 320);
+
+    final glassCardBottom = _clampDouble(height * 0.028, 22, 34);
+    final titleFontSize = isTablet
+        ? _clampDouble(width * 0.044, 28, 34)
+        : _clampDouble(width * 0.064, 23, 28);
+    final subtitleFontSize = isTablet
+        ? _clampDouble(width * 0.021, 14, 16)
+        : _clampDouble(width * 0.034, 12.5, 14);
+    final badgeFontSize = isTablet
+        ? _clampDouble(width * 0.018, 12, 14)
+        : _clampDouble(width * 0.030, 11, 12.5);
 
     return Scaffold(
       backgroundColor: themeBg,
@@ -22,12 +52,18 @@ class Settings extends StatelessWidget {
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverAppBar(
-            expandedHeight: 235,
+            expandedHeight: headerHeight,
             pinned: true,
             stretch: true,
+            toolbarHeight: 66,
+            leadingWidth: 72,
             backgroundColor: const Color(0xFF8D6E63),
             leading: Padding(
-              padding: const EdgeInsets.all(8),
+              padding: EdgeInsets.only(
+                left: horizontalPadding,
+                top: 5,
+                bottom: 22,
+              ),
               child: _GlassIconButton(
                 icon: Icons.arrow_back_ios_new_rounded,
                 onTap: () => Navigator.pop(context),
@@ -66,65 +102,97 @@ class Settings extends StatelessWidget {
                     ),
                   ),
                   Positioned(
-                    left: 16,
-                    right: 16,
-                    bottom: 22,
+                    left: horizontalPadding,
+                    right: horizontalPadding,
+                    bottom: glassCardBottom,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                         child: Container(
-                          padding: const EdgeInsets.all(16),
+                          padding: EdgeInsets.all(contentPadding),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.14),
                             borderRadius: BorderRadius.circular(24),
                             border: Border.all(
                               color: Colors.white.withOpacity(0.22),
                             ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 7,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.16),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: const Text(
-                                  'Preferences',
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: .4,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'Settings &\nprofile info',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 26,
-                                  height: 1.12,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Manage your personal information and account details.',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.92),
-                                  fontSize: 13.5,
-                                  height: 1.45,
-                                  fontWeight: FontWeight.w400,
-                                ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.10),
+                                blurRadius: 16,
+                                offset: const Offset(0, 8),
                               ),
                             ],
+                          ),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact = constraints.maxWidth < 360;
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: _clampDouble(
+                                        constraints.maxWidth * 0.035,
+                                        10,
+                                        14,
+                                      ),
+                                      vertical: _clampDouble(
+                                        constraints.maxWidth * 0.018,
+                                        6,
+                                        8,
+                                      ),
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.16),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      'Preferences',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: badgeFontSize,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: .4,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    height: _clampDouble(height * 0.014, 9, 14),
+                                  ),
+                                  Text(
+                                    compact
+                                        ? 'Settings &\nprofile info'
+                                        : 'Settings & profile info',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: titleFontSize,
+                                      height: 1.12,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(
+                                    height: _clampDouble(height * 0.010, 6, 10),
+                                  ),
+                                  Text(
+                                    'Manage your personal information and account details.',
+                                    maxLines: compact ? 3 : 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.92),
+                                      fontSize: subtitleFontSize,
+                                      height: 1.45,
+                                      fontWeight: FontWeight.w400,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -134,7 +202,6 @@ class Settings extends StatelessWidget {
               ),
             ),
           ),
-
           SliverToBoxAdapter(
             child: Transform.translate(
               offset: const Offset(0, -10),
@@ -146,7 +213,12 @@ class Settings extends StatelessWidget {
                   ),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPadding,
+                    _clampDouble(height * 0.015, 10, 16),
+                    horizontalPadding,
+                    _clampDouble(height * 0.032, 22, 34),
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -155,11 +227,10 @@ class Settings extends StatelessWidget {
                         subtitle:
                             'Update your profile details and keep your information up to date.',
                       ),
-                      const SizedBox(height: 16),
-
+                      SizedBox(height: _clampDouble(height * 0.020, 14, 20)),
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.all(16),
+                        padding: EdgeInsets.all(contentPadding),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(24),
@@ -191,21 +262,24 @@ class Settings extends StatelessWidget {
     );
   }
 
-  void _editName(BuildContext context, TextEditingController nameController) async {
-  final result = await showDialog<String>(
-    context: context,
-    builder: (_) => BlocProvider.value(
-      value: context.read<UserCubit>(),
-      child: EditNameDialog(
-        currentName: nameController.text,
+  void _editName(
+    BuildContext context,
+    TextEditingController nameController,
+  ) async {
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => BlocProvider.value(
+        value: context.read<UserCubit>(),
+        child: EditNameDialog(
+          currentName: nameController.text,
+        ),
       ),
-    ),
-  );
+    );
 
-  if (result != null && result.trim().isNotEmpty) {
-    nameController.text = result.trim();
+    if (result != null && result.trim().isNotEmpty) {
+      nameController.text = result.trim();
+    }
   }
-}
 }
 
 class _GlassIconButton extends StatelessWidget {
@@ -219,21 +293,25 @@ class _GlassIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final buttonSize = (width * 0.112).clamp(42.0, 50.0).toDouble();
+    final radius = (width * 0.036).clamp(13.0, 16.0).toDouble();
+
     return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
         child: Material(
           color: Colors.white.withOpacity(0.14),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(radius),
           child: InkWell(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(radius),
             onTap: onTap,
             child: Container(
-              width: 42,
-              height: 42,
+              width: buttonSize,
+              height: buttonSize,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(radius),
                 border: Border.all(
                   color: Colors.white.withOpacity(0.20),
                 ),
@@ -241,7 +319,7 @@ class _GlassIconButton extends StatelessWidget {
               child: Icon(
                 icon,
                 color: Colors.white,
-                size: 18,
+                size: (buttonSize * 0.43).clamp(18.0, 22.0).toDouble(),
               ),
             ),
           ),
@@ -260,25 +338,37 @@ class _SectionHeader extends StatelessWidget {
     required this.subtitle,
   });
 
+  double _clampDouble(double value, double min, double max) {
+    return value.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final width = media.size.width;
+
+    final titleSize = _clampDouble(width * 0.052, 18, 22);
+    final subtitleSize = _clampDouble(width * 0.033, 12, 13.5);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style: const TextStyle(
-            fontSize: 20,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: titleSize,
             fontWeight: FontWeight.w800,
-            color: Color(0xFF2E251F),
+            color: const Color(0xFF2E251F),
           ),
         ),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          style: const TextStyle(
-            fontSize: 12.5,
-            color: Color(0xFF81756C),
+          style: TextStyle(
+            fontSize: subtitleSize,
+            color: const Color(0xFF81756C),
             height: 1.5,
           ),
         ),

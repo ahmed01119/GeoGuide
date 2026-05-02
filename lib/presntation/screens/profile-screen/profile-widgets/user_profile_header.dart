@@ -1,34 +1,128 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geoguide/constants/app_assets.dart';
 import 'package:geoguide/constants/app_colors.dart';
+import 'package:geoguide/cubit/user_cubit.dart';
 import 'package:geoguide/models.dart/user-model.dart';
 import 'package:image_picker/image_picker.dart';
 
 class UserProfileHeader extends StatefulWidget {
   final UserModel user;
+  final String imageUrl;
 
-  const UserProfileHeader({super.key, required this.user});
+  const UserProfileHeader({
+    super.key,
+    required this.user,
+    required this.imageUrl,
+  });
 
   @override
   State<UserProfileHeader> createState() => _UserProfileHeaderState();
 }
 
 class _UserProfileHeaderState extends State<UserProfileHeader> {
-  File? _imageFile;
+  Uint8List? _pickedImageBytes;
+  bool _isUploading = false;
 
   Future<void> _pickImage() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
-      imageQuality: 85,
+      imageQuality: 60,
+      maxWidth: 800,
     );
 
-    if (picked != null) {
-      setState(() {
-        _imageFile = File(picked.path);
-      });
+    if (picked == null) return;
+
+    final bytes = await picked.readAsBytes();
+
+    setState(() {
+      _pickedImageBytes = bytes;
+      _isUploading = true;
+    });
+
+    final ok = await context
+        .read<UserCubit>()
+        .updateProfileImageCloudinary(picked);
+
+    if (!mounted) return;
+
+    setState(() {
+      _isUploading = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Profile image updated' : 'Could not update image'),
+      ),
+    );
+  }
+
+  ImageProvider _getProfileImage() {
+    if (_pickedImageBytes != null) {
+      return MemoryImage(_pickedImageBytes!);
     }
+
+    if (widget.imageUrl.trim().isNotEmpty) {
+      return NetworkImage(widget.imageUrl.trim());
+    }
+
+    return const AssetImage(AppAssets.unknown);
+  }
+
+  void _showImagePreview() {
+    final image = _getProfileImage();
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.88),
+      builder: (_) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(18),
+          child: GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                InteractiveViewer(
+                  minScale: 0.8,
+                  maxScale: 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(22),
+                    child: Image(
+                      image: image,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(50),
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.55),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -48,29 +142,51 @@ class _UserProfileHeaderState extends State<UserProfileHeader> {
           Stack(
             clipBehavior: Clip.none,
             children: [
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.22),
-                    width: 2,
+              GestureDetector(
+                onTap: _showImagePreview,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.22),
+                      width: 2,
+                    ),
+                  ),
+                  child: CircleAvatar(
+                    radius: 48,
+                    backgroundColor: const Color(0xFFF4ECE5),
+                    backgroundImage: _getProfileImage(),
                   ),
                 ),
-                child: CircleAvatar(
-                  radius: 48,
-                  backgroundColor: const Color(0xFFF4ECE5),
-                  backgroundImage: _imageFile != null
-                      ? FileImage(_imageFile!)
-                      : const AssetImage(AppAssets.unknown) as ImageProvider,
-                ),
               ),
+
+              if (_isUploading)
+                Positioned.fill(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.25),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Center(
+                      child: SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
               Positioned(
                 bottom: -2,
                 right: -2,
                 child: InkWell(
                   borderRadius: BorderRadius.circular(50),
-                  onTap: _pickImage,
+                  onTap: _isUploading ? null : _pickImage,
                   child: Container(
                     padding: const EdgeInsets.all(9),
                     decoration: BoxDecoration(

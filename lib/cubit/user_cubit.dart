@@ -7,6 +7,7 @@ import 'package:geoguide/models.dart/login_model.dart';
 import 'package:geoguide/presntation/screens/signup-screen/signup-widget/signup-form.dart';
 import 'package:geoguide/services/auth_service.dart';
 import 'package:geoguide/services/chatbot_service.dart';
+import 'package:geoguide/services/cloudinary_service.dart';
 import 'package:geoguide/services/firebase_service.dart';
 import 'package:geoguide/cubit/user-state.dart';
 import 'package:image_picker/image_picker.dart';
@@ -315,6 +316,30 @@ final ChatbotService chatbotService = ChatbotService();
       emit(GetProfileFailure(errMessage: 'Failed to load profile'));
     }
   }
+
+Future<bool> updateProfileImageCloudinary(XFile imageFile) async {
+  final uid = currentUid;
+
+  if (uid == null) {
+    emit(GetProfileFailure(errMessage: 'User not logged in'));
+    return false;
+  }
+
+  try {
+    final imageUrl = await CloudinaryService.uploadProfileImage(imageFile);
+
+    await FirebaseFirestore.instance.collection('users').doc(uid).set({
+      'image': imageUrl,
+    }, SetOptions(merge: true));
+
+    emit(UserInfoUpdated());
+    return true;
+  } catch (e) {
+    debugPrint('Cloudinary profile image error: $e');
+    emit(GetProfileFailure(errMessage: 'Failed to upload profile image'));
+    return false;
+  }
+}
 
   void updateUserInfo({
     String? name,

@@ -53,7 +53,7 @@ class LandmarkImageAiService {
   //   //return 'http://$laptopIp:3000';
   // }
 static const String baseUrl =
-    "https://Mostafa1249687-geoguide-api.hf.space";
+    "https://mostafa1249687-geoguide-api.hf.space";
   Future<AiImageDetails> describeImage(XFile imageFile) async {
     final bytes = await imageFile.readAsBytes();
     final base64Image = base64Encode(bytes);

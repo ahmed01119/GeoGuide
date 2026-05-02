@@ -18,7 +18,7 @@ class ChatbotService {
   // }
 
 static const String _newAiBaseUrl =
-    "https://Mostafa1249687-geoguide-api.hf.space";
+    "https://mostafa1249687-geoguide-api.hf.space";
 
   static String get _oldFlaskBaseUrl {
     if (kIsWeb) return 'http://localhost:1234';
