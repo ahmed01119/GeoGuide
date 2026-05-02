@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
+import 'package:geoguide/core/config/app_config.dart';
 import 'package:geoguide/core/place_category_normalizer.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 
@@ -41,12 +42,9 @@ class PlannerService {
 
   final http.Client _client;
 
-  static const String _geminiKey =
-      String.fromEnvironment('GEMINI_API_KEY', defaultValue: '');
-  static const String _geminiModel =
-      String.fromEnvironment('GEMINI_MODEL', defaultValue: 'gemini-2.5-flash');
-
-  bool get _hasGemini => _geminiKey.trim().isNotEmpty;
+  String get _geminiKey => AppConfig.geminiApiKey;
+  String get _geminiModel => AppConfig.geminiModel;
+  bool get _hasGemini => AppConfig.hasValidGeminiKey;
 
   // ════════════════════════════════════════════════════════
   //  PUBLIC API
