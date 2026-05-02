@@ -771,15 +771,23 @@ Future<void> _openCamera() async {
             // Draggable bot button
             Positioned(
               left: _botOffset.dx,
-              top: _botOffset.dy.clamp(0.0, maxBotTop),
+              top: _botOffset.dy.clamp(
+                0.0,
+                MediaQuery.of(context).size.height - 130,
+              ),
               child: BotButton(
                 initialOffset: _botOffset,
-                onDragEnd: (offset) => setState(() {
-                  _botOffset = Offset(
-                    offset.dx,
-                    offset.dy.clamp(0.0, maxBotTop),
-                  );
-                }),
+                onDragEnd: (offset) {
+                  setState(() {
+                    _botOffset = Offset(
+                      offset.dx,
+                      offset.dy.clamp(
+                        0.0,
+                        MediaQuery.of(context).size.height - 130,
+                      ),
+                    );
+                  });
+                },
               ),
             ),
           ],
@@ -795,22 +803,26 @@ Future<void> _openCamera() async {
               ),
             ],
           ),
-          child: FloatingActionButton(
-            onPressed: _openCamera,
-            backgroundColor: AppColors.chestnutBrown,
-            shape: const CircleBorder(
-              side: BorderSide(color: AppColors.white, width: 3),
+          child: SizedBox(
+            width: 68,
+            height: 68,
+            child: FloatingActionButton(
+              onPressed: _openCamera,
+              backgroundColor: AppColors.chestnutBrown,
+              shape: const CircleBorder(
+                side: BorderSide(color: AppColors.white, width: 4),
+              ),
+              child: const Icon(
+                Icons.camera_alt_rounded,
+                color: AppColors.white,
+                size: 30,
+              ),
             ),
-            child: const Icon(Icons.camera_alt_rounded,
-                color: AppColors.white, size: 30),
           ),
         ),
-        floatingActionButtonLocation:
-            FloatingActionButtonLocation.centerDocked,
-        bottomNavigationBar: CustomBottomNavBar(
-          currentIndex: 0,
-          onHomeRefresh: _refreshHomeAndScrollTop,
-        ),
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+
+        bottomNavigationBar: const CustomBottomNavBar(),
       ),
     );
   }
