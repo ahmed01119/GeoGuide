@@ -21,109 +21,73 @@ class CustomBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BottomAppBar(
-      shape: const CircularNotchedRectangle(),
-      notchMargin: 8,
-      elevation: 0,
-      color: Colors.transparent,
-      child: Container(
-        height: 70,
-        decoration: BoxDecoration(
-          color: AppColors.chestnutBrown,
-          borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(24)),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.chestnutBrown.withOpacity(0.4),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            // ── Home ─────────────────────────────────────────────────
-            _buildNavItem(
-              context,
-              icon: Icons.home_rounded,
-              label: AppText.home,
-              isActive: currentIndex == 0,
-              onTap: () {
-                final navigator = Navigator.of(context);
-
-                // Keep the exact same design.
-                // If Home provides a refresh callback, run it immediately.
-                if (onHomeRefresh != null) {
-                  onHomeRefresh!();
-                  return;
-                }
-
-                // Otherwise go back to Home as before.
-                if (navigator.canPop()) {
-                  navigator.popUntil(
-                    (route) =>
-                        route.settings.name == Home.routeName ||
-                        route.isFirst,
+    return ClipRRect(
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+      child: BottomAppBar(
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 10,
+        elevation: 0,
+        color: AppColors.chestnutBrown,
+        surfaceTintColor: Colors.transparent,
+        child: SizedBox(
+          height: 76,
+          child: Row(
+            children: [
+              _buildNavItem(
+                context,
+                icon: Icons.home_rounded,
+                label: AppText.home,
+                isActive: currentIndex == 0,
+                onTap: () {},
+              ),
+              _buildNavItem(
+                context,
+                icon: Icons.person_rounded,
+                label: AppText.profile,
+                isActive: currentIndex == 1,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => BlocProvider.value(
+                        value: context.read<UserCubit>(),
+                        child: const Profile(),
+                      ),
+                    ),
                   );
-                }
-              },
-            ),
-
-            // ── Profile ───────────────────────────────────────────────
-            _buildNavItem(
-              context,
-              icon: Icons.person_rounded,
-              label: AppText.profile,
-              isActive: currentIndex == 1,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: context.read<UserCubit>(),
-                      child: const Profile(),
+                },
+              ),
+              const SizedBox(width: 56),
+              _buildNavItem(
+                context,
+                icon: Icons.star_border_rounded,
+                label: AppText.favorites,
+                isActive: currentIndex == 2,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const FavoritesPage(),
                     ),
-                  ),
-                );
-              },
-            ),
-
-            const SizedBox(width: 44), // FAB notch space
-
-            // ── Favorites ─────────────────────────────────────────────
-            _buildNavItem(
-              context,
-              icon: Icons.favorite_rounded,
-              label: AppText.favorites,
-              isActive: currentIndex == 2,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (_) => const FavoritesPage()),
-                );
-              },
-            ),
-
-            // ── Settings ──────────────────────────────────────────────
-            _buildNavItem(
-              context,
-              icon: Icons.settings_rounded,
-              label: AppText.settings,
-              isActive: currentIndex == 3,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => BlocProvider.value(
-                      value: context.read<UserCubit>(),
-                      child: const Settings(),
+                  );
+                },
+              ),
+              _buildNavItem(
+                context,
+                icon: Icons.settings_rounded,
+                label: AppText.settings,
+                isActive: currentIndex == 3,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const Settings(),
                     ),
-                  ),
-                );
-              },
-            ),
-          ],
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -142,25 +106,25 @@ class CustomBottomNavBar extends StatelessWidget {
         onTap: onTap,
         child: Center(
           child: SizedBox(
-            height: 52,
+            height: 56,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                      horizontal: 9, vertical: 3),
                   decoration: BoxDecoration(
                     color: isActive
-                        ? Colors.white.withOpacity(0.14)
+                        ? Colors.white.withOpacity(0.12)
                         : Colors.transparent,
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child:
-                      Icon(icon, color: Colors.white, size: 21),
+                      Icon(icon, color: Colors.white, size: 29),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 1),
                 SizedBox(
-                  height: 11,
+                  height: 16,
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
@@ -169,11 +133,11 @@ class CustomBottomNavBar extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 9.5,
+                        fontSize: 10,
                         height: 1,
                         fontWeight: isActive
                             ? FontWeight.w700
-                            : FontWeight.w500,
+                            : FontWeight.w600,
                       ),
                     ),
                   ),

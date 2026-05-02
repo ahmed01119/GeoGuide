@@ -80,6 +80,52 @@ Future<void> _launchSafely(
   }
 }
 
+Future<void> _launchUberRide(
+  Landmark place, {
+  BuildContext? context,
+}) async {
+  final destinationName = place.name.trim().isNotEmpty ? place.name : 'Destination';
+  final destinationAddress = place.address.trim().isNotEmpty
+      ? place.address
+      : '${place.name} ${place.city} Egypt'.trim();
+
+  final hasCoords = place.lat != 0 && place.lng != 0;
+  final appUri = Uri.parse(
+    hasCoords
+        ? 'uber://?action=setPickup'
+            '&dropoff[latitude]=${place.lat}'
+            '&dropoff[longitude]=${place.lng}'
+            '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}'
+        : 'uber://?action=setPickup'
+            '&dropoff[formatted_address]=${Uri.encodeComponent(destinationAddress)}'
+            '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}',
+  );
+
+  final webUri = Uri.parse(
+    hasCoords
+        ? 'https://m.uber.com/ul/?action=setPickup'
+            '&dropoff[latitude]=${place.lat}'
+            '&dropoff[longitude]=${place.lng}'
+            '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}'
+        : 'https://m.uber.com/ul/?action=setPickup'
+            '&dropoff[formatted_address]=${Uri.encodeComponent(destinationAddress)}'
+            '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}',
+  );
+
+  bool launched = false;
+  if (!kIsWeb) {
+    launched = await launchUrl(appUri, mode: LaunchMode.externalApplication);
+  }
+
+  if (!launched) {
+    await _launchSafely(
+      webUri,
+      context: context,
+      errorMessage: 'Could not open Uber.',
+    );
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 //  PLACE INFO SCREEN
 // ────────────────────────────────────────────────────────────────
@@ -672,6 +718,16 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
       ),
     );
   }
+  List<String> _effectiveMediaUrls(Landmark place) {
+    final urls = <String>[];
+    for (final u in place.mediaUrls) {
+      final t = u.trim();
+      if (t.isNotEmpty && !urls.contains(t)) urls.add(t);
+    }
+    final main = place.imageUrl.trim();
+    if (main.isNotEmpty && !urls.contains(main)) urls.insert(0, main);
+    return urls;
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -710,6 +766,7 @@ class _DetailsTab extends StatelessWidget {
     }
     await _launchSafely(uri, context: context);
   }
+  
 
   @override
   Widget build(BuildContext context) {
@@ -1953,6 +2010,23 @@ class _PremiumBookingSection extends StatelessWidget {
             context: context,
           ),
         ),
+        const SizedBox(height: 10),
+        _BookingProviderCard(
+          providerName: 'Uber',
+          tagline: 'Open Uber and book your ride',
+          badge: 'RIDE',
+          badgeColor: Colors.black,
+          icon: Icons.local_taxi_rounded,
+          iconBg: const Color(0xFFF3F3F3),
+          iconColor: Colors.black87,
+          priceHint: 'Live fare estimate',
+          features: const [
+            'Open Uber app',
+            'Set destination automatically',
+            'Order in seconds',
+          ],
+          onTap: () => _launchUberRide(place, context: context),
+        ),
       ],
     );
   }
@@ -1999,6 +2073,23 @@ class _PremiumBookingSection extends StatelessWidget {
                 'https://www.tripadvisor.com/Search?q=$_encodedQuery'),
             context: context,
           ),
+        ),
+        const SizedBox(height: 10),
+        _BookingProviderCard(
+          providerName: 'Uber',
+          tagline: 'Open Uber and book your ride',
+          badge: 'RIDE',
+          badgeColor: Colors.black,
+          icon: Icons.local_taxi_rounded,
+          iconBg: const Color(0xFFF3F3F3),
+          iconColor: Colors.black87,
+          priceHint: 'Live fare estimate',
+          features: const [
+            'Open Uber app',
+            'Set destination automatically',
+            'Order in seconds',
+          ],
+          onTap: () => _launchUberRide(place, context: context),
         ),
       ],
     );
@@ -2047,6 +2138,23 @@ class _PremiumBookingSection extends StatelessWidget {
                 'https://www.getyourguide.com/s/?q=$_encodedName'),
             context: context,
           ),
+        ),
+        const SizedBox(height: 10),
+        _BookingProviderCard(
+          providerName: 'Uber',
+          tagline: 'Open Uber and book your ride',
+          badge: 'RIDE',
+          badgeColor: Colors.black,
+          icon: Icons.local_taxi_rounded,
+          iconBg: const Color(0xFFF3F3F3),
+          iconColor: Colors.black87,
+          priceHint: 'Live fare estimate',
+          features: const [
+            'Open Uber app',
+            'Set destination automatically',
+            'Order in seconds',
+          ],
+          onTap: () => _launchUberRide(place, context: context),
         ),
       ],
     );
