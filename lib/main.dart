@@ -59,6 +59,38 @@ Future<void> clearImagesFromFirestore() async {
   debugPrint('Images + refresh timestamps cleared safely ✅');
 }
 
+Future<void> keepOnlyTenLandmarks() async {
+  try {
+    final firestore = FirebaseFirestore.instance;
+
+    final snapshot = await firestore.collection('landmarks').get();
+
+    print('Total landmarks: ${snapshot.docs.length}');
+
+    if (snapshot.docs.length <= 10) {
+      print('Already 10 or less.');
+      return;
+    }
+
+    final batch = firestore.batch();
+
+    // سيب أول 10 وامسح الباقي
+    for (int i = 10; i < snapshot.docs.length; i++) {
+      final doc = snapshot.docs[i];
+
+      print('Deleting: ${doc.id}');
+
+      batch.delete(doc.reference);
+    }
+
+    await batch.commit();
+
+    print('Deleted successfully.');
+  } catch (e) {
+    print('ERROR: $e');
+  }
+}
+
 Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
@@ -79,9 +111,9 @@ Future<void> main() async {
     await CitySeeder.seedIfEmpty();
     await CacheHelper.saveData(key: 'seeded', value: true);
   }
-
   FlutterNativeSplash.remove();
-
+await clearBadImageLinksFromFirestore();
+await clearImagesFromFirestore();
   runApp(
     MultiBlocProvider(
       providers: [

@@ -80,12 +80,17 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
 
     for (final url in urls) {
       final clean = url.trim();
-      if (_isValidImageUrl(clean) &&
-          !isBadImageUrl(clean) &&
-          !_failedImageUrls.contains(clean) &&
-          seen.add(_dedupeKey(clean))) {
-        result.add(clean);
-      }
+      final key = _dedupeKey(clean);
+
+debugPrint('[Sanitize] key=$key');
+
+if (_isValidImageUrl(clean) &&
+    !isBadImageUrl(clean) &&
+    !_failedImageUrls.contains(clean) &&
+    seen.add(key)) {
+  debugPrint('[Sanitize] accepted=$clean');
+  result.add(clean);
+}
     }
 
     return result;
@@ -195,15 +200,101 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
     return egyptSignals.any((signal) => lower.contains(signal));
   }
 
- Future<List<String>> fetchImages(
+bool _isStronglyRelatedToPlace(
+  String meta,
+  String place,
+  String city,
+) {
+  String normalize(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('pyrmaid', 'pyramid')
+        .replaceAll('piramide', 'pyramid')
+        .replaceAll('pyramids', 'pyramid')
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  final text = normalize(meta);
+  final p = normalize(place);
+
+  debugPrint('[Image Filter] place=$p');
+  debugPrint('[Image Filter] meta=$text');
+
+  if (p.contains('pyramid')) {
+    final ok = text.contains('pyramid') || text.contains('giza');
+    debugPrint('[Image Filter] pyramid ok=$ok');
+    return ok;
+  }
+
+  if (p.contains('tower')) {
+    final ok = text.contains('tower');
+    debugPrint('[Image Filter] tower ok=$ok');
+    return ok;
+  }
+
+  if (p.contains('citadel')) {
+    final ok = text.contains('citadel') || text.contains('qaitbay');
+    debugPrint('[Image Filter] citadel ok=$ok');
+    return ok;
+  }
+
+  final tokens = p
+      .split(' ')
+      .where((t) =>
+          t.length >= 4 &&
+          !['great', 'egypt', 'tourist', 'attraction', 'landmark'].contains(t))
+      .toList();
+
+  if (tokens.isEmpty) return true;
+
+  final matched = tokens.where((t) => text.contains(t)).length;
+
+  final ok = matched >= 1;
+  debugPrint('[Image Filter] tokens=$tokens matched=$matched ok=$ok');
+
+  return ok;
+}
+
+Future<List<String>> fetchImages(
   String placeName, {
   String cityName = '',
+  String category = '',
   int count = 6,
   List<String> excludeUrls = const [],
 }) async {
   final place = placeName.trim();
   final city = cityName.trim();
+  String normalizedCategory = _normalizeCategory(category);
+
+final placeLower = place.toLowerCase();
+
+final isTouristPlace = [
+  'pyramid',
+  'sphinx',
+  'temple',
+  'museum',
+  'citadel',
+  'mosque',
+  'church',
+  'palace',
+  'castle',
+  'tomb',
+  'ruins',
+  'monument',
+  'landmark',
+].any(placeLower.contains);
+
+if (isTouristPlace) {
+  normalizedCategory = 'tourist';
+}
   final safeCount = count.clamp(1, 10);
+
+  // المطلوب: نعتمد على الاتنين APIs بشكل ثابت.
+  // Pexels يجيب أول 3 صور، و Unsplash يكمل باقي العدد بدون تكرار.
+  final pexelsTarget = safeCount >= 6 ? 3 : (safeCount / 2).ceil();
+  final unsplashTarget = safeCount - pexelsTarget;
 
   debugPrint(
     '[Images] keys: pexels=${_pexelsApiKey.isNotEmpty}, unsplash=${_unsplashApiKey.isNotEmpty}',
@@ -211,7 +302,7 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
 
   if (place.isEmpty) return [];
 
-  final cacheKey = '$place|$city|$safeCount'.toLowerCase();
+  final cacheKey = '$place|$city|$normalizedCategory|$safeCount|split_v3'.toLowerCase();
   if (_memoryCache.containsKey(cacheKey)) {
     return _memoryCache[cacheKey]!;
   }
@@ -223,40 +314,60 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
     seen.add(_dedupeKey(u));
   }
 
-  void collect(List<String> urls) {
-    for (final url in sanitizeImages(urls)) {
-      final key = _dedupeKey(url);
+  List<String> pickUnique(List<String> urls, int limit) {
+    if (limit <= 0) return const [];
 
-      // مهم: لا نفلتر بالاسم هنا لأن روابط Pexels/Unsplash
-      // غالبًا لا تحتوي اسم المكان.
+    final picked = <String>[];
+    final ranked = _rankImages(sanitizeImages(urls), place, city, normalizedCategory);
+
+    for (final url in ranked) {
+      final key = _dedupeKey(url);
       if (seen.add(key)) {
-        results.add(url);
-        if (results.length >= safeCount) return;
-      }
+  debugPrint('[PickUnique] adding=$url');
+  picked.add(url);
+
+  if (picked.length >= limit) break;
+}
     }
+
+    return picked;
   }
 
+  List<String> pexels = const [];
+  List<String> unsplash = const [];
+
   try {
-    final pexels = await _fetchFromPexels(place, city);
+    pexels = await _fetchFromPexels(place, city, normalizedCategory);
     debugPrint('[Images] Pexels returned=${pexels.length}');
-    collect(pexels);
   } catch (e) {
     debugPrint('[Images] Pexels error: $e');
   }
 
+  results.addAll(pickUnique(pexels, pexelsTarget));
+
+  try {
+    unsplash = await _fetchFromUnsplash(place, city, normalizedCategory);
+    debugPrint('[Images] Unsplash returned=${unsplash.length}');
+  } catch (e) {
+    debugPrint('[Images] Unsplash error: $e');
+  }
+
+  results.addAll(pickUnique(unsplash, unsplashTarget));
+
+  // لو مصدر منهم رجّع أقل من المطلوب، نكمل من المصدر التاني بدون تكرار.
   if (results.length < safeCount) {
-    try {
-      final unsplash = await _fetchFromUnsplash(place, city);
-      debugPrint('[Images] Unsplash returned=${unsplash.length}');
-      collect(unsplash);
-    } catch (e) {
-      debugPrint('[Images] Unsplash error: $e');
-    }
+    results.addAll(pickUnique(pexels, safeCount - results.length));
+  }
+  if (results.length < safeCount) {
+    results.addAll(pickUnique(unsplash, safeCount - results.length));
   }
 
   final finalImages = results.take(safeCount).toList();
 
-  debugPrint('[Images] FINAL returned=${finalImages.length} for $place');
+  debugPrint(
+    '[Images] FINAL returned=${finalImages.length} for $place '
+    '(pexelsTarget=$pexelsTarget, unsplashTarget=$unsplashTarget)',
+  );
 
   _memoryCache[cacheKey] = finalImages;
   return finalImages;
@@ -265,12 +376,14 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
   Future<List<String>> getImagesForPlace({
     required String placeName,
     String? cityName,
+    String category = '',
     int count = 7,
     List<String> excludeUrls = const [],
   }) async {
     return fetchImages(
       placeName,
-      cityName: cityName!,
+      cityName: cityName ?? '',
+      category: category,
       count: count,
       excludeUrls: excludeUrls,
     );
@@ -284,15 +397,11 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
     return [];
   }
 
-  Future<List<String>> _fetchFromUnsplash(String place, String city) async {
+  Future<List<String>> _fetchFromUnsplash(String place, String city, String category) async {
     if (_unsplashApiKey.trim().isEmpty) return [];
 
     try {
-      final queries = _egyptQueries(place, city, const [
-        'travel',
-        'landmark',
-        'tourist attraction',
-      ]);
+      final queries = _queriesForPlace(place, city, category);
 
       final results = <String>[];
       final seen = <String>{};
@@ -333,7 +442,27 @@ debugPrint('[Unsplash] body=${res.body.substring(0, res.body.length > 300 ? 300 
           final img = (e['urls']?['regular'] ?? e['urls']?['full'] ?? '')
               .toString()
               .trim();
-          if (!_isValidImageUrl(img) || !_looksUseful(img)) continue;
+          final metaText = [
+  e['slug'],
+  e['description'],
+  e['alt_description'],
+  e['user']?['name'],
+  img,
+  place,
+  city,
+].whereType<Object>().join(' ');
+          final related = _isStronglyRelatedToPlace(metaText, place, city);
+
+debugPrint('[Unsplash Check] img=$img');
+debugPrint('[Unsplash Check] meta=$metaText');
+debugPrint('[Unsplash Check] related=$related');
+
+if (!_isValidImageUrl(img) ||
+    !_looksUseful(img) ||
+    !_looksAllowedForCategory(metaText, category) ||
+    !related) {
+  continue;
+}
           if (seen.add(_dedupeKey(img))) {
             results.add(img);
             if (results.length >= 8) break;
@@ -350,16 +479,11 @@ debugPrint('[Unsplash] body=${res.body.substring(0, res.body.length > 300 ? 300 
     }
   }
 
-  Future<List<String>> _fetchFromPexels(String place, String city) async {
+  Future<List<String>> _fetchFromPexels(String place, String city, String category) async {
     if (_pexelsApiKey.trim().isEmpty) return [];
 
     try {
-      final queries = _egyptQueries(place, city, const [
-        'landmark',
-        'tourist attraction',
-        'architecture',
-        'travel',
-      ]);
+      final queries = _queriesForPlace(place, city, category);
 
       final results = <String>[];
       final seen = <String>{};
@@ -402,8 +526,25 @@ debugPrint('[Pexels] body=${res.body.substring(0, res.body.length > 300 ? 300 : 
           final img =
               (src['large2x'] ?? src['large'] ?? src['original'] ?? '')
                   .toString();
+          final metaText = [
+  p['url'],
+  p['alt'],
+  p['photographer'],
+  img,
+].whereType<Object>().join(' ');
 
-          if (!_isValidImageUrl(img) || !_looksUseful(img)) continue;
+          final related = _isStronglyRelatedToPlace(metaText, place, city);
+
+debugPrint('[Pexels Check] img=$img');
+debugPrint('[Pexels Check] meta=$metaText');
+debugPrint('[Pexels Check] related=$related');
+
+if (!_isValidImageUrl(img) ||
+    !_looksUseful(img) ||
+    !_looksAllowedForCategory(metaText, category) ||
+    !related) {
+  continue;
+}
 
           if (seen.add(_dedupeKey(img))) {
             results.add(img);
@@ -432,23 +573,23 @@ debugPrint('[Pexels] body=${res.body.substring(0, res.body.length > 300 ? 300 : 
     return result;
   }
 
-  String _dedupeKey(String url) {
-    final uri = Uri.tryParse(url.trim());
-    if (uri == null) return url.toLowerCase();
-    final noQuery = uri.replace(query: '', fragment: '').toString();
-    return noQuery
-        .toLowerCase()
-        .replaceAll(RegExp(r'/(thumb)/'), '/')
-        .replaceAll(RegExp(r'_[0-9]+x[0-9]+'), '');
-  }
+ String _dedupeKey(String url) {
+  final uri = Uri.tryParse(url);
 
-  List<String> _rankImages(List<String> urls, String place, String city) {
+  if (uri == null) return url;
+
+  // unique by full path only
+  return '${uri.host}${uri.path}';
+}
+
+  List<String> _rankImages(List<String> urls, String place, String city, String category) {
     final lowerPlaceTokens = place
         .toLowerCase()
         .split(RegExp(r'[^a-z0-9]+'))
         .where((t) => t.length >= 4)
         .toList();
     final lowerCity = city.toLowerCase();
+    final cat = _normalizeCategory(category);
 
     int score(String url) {
       final lower = url.toLowerCase();
@@ -456,6 +597,14 @@ debugPrint('[Pexels] body=${res.body.substring(0, res.body.length > 300 ? 300 : 
 
       if (lower.contains('images.unsplash.com')) s += 3;
       if (lower.contains('images.pexels.com')) s += 3;
+
+      if (cat == 'restaurant' && lower.contains('restaurant')) s += 4;
+      if (cat == 'cafe' && (lower.contains('cafe') || lower.contains('coffee'))) s += 4;
+      if (cat == 'hotel' && (lower.contains('hotel') || lower.contains('resort'))) s += 4;
+      if (cat == 'tourist' &&
+          (lower.contains('landmark') || lower.contains('monument'))) {
+        s += 4;
+      }
 
       for (final token in lowerPlaceTokens) {
         if (lower.contains(token)) s += 3;
@@ -506,24 +655,95 @@ debugPrint('[Pexels] body=${res.body.substring(0, res.body.length > 300 ? 300 : 
     return !bad.any(lower.contains);
   }
 
-  List<String> _egyptQueries(String place, String city, List<String> intents) {
-    final cleanPlace = place.trim();
-    final cleanCity = city.trim();
-    final queries = <String>[];
+  String _normalizeCategory(String category) {
+    final c = category.trim().toLowerCase();
+    if (c.contains('restaurant') || c.contains('dining') || c.contains('food')) {
+      return 'restaurant';
+    }
+    if (c.contains('cafe') || c.contains('coffee')) return 'cafe';
+    if (c.contains('hotel') || c.contains('resort') || c.contains('lodging')) {
+      return 'hotel';
+    }
+    if (c.contains('outing') || c.contains('park') || c.contains('entertainment')) {
+      return 'outing';
+    }
+    return 'tourist';
+  }
 
-    for (final intent in intents) {
-      if (cleanCity.isNotEmpty) {
-        queries.add('$cleanPlace $cleanCity Egypt $intent');
-      }
-      queries.add('$cleanPlace Egypt $intent');
+ List<String> _queriesForPlace(String place, String city, String category) {
+  final cleanPlace = place.trim();
+  final cleanCity = city.trim();
+  final cat = _normalizeCategory(category);
+  final queries = <String>[];
+
+  void add(String q) {
+    final clean = q.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (clean.isNotEmpty) queries.add(clean);
+  }
+
+  if (cat == 'restaurant') {
+    add('$cleanPlace restaurant $cleanCity Egypt');
+    add('$cleanPlace $cleanCity');
+  } else if (cat == 'cafe') {
+    add('$cleanPlace cafe $cleanCity Egypt');
+    add('$cleanPlace $cleanCity');
+  } else if (cat == 'hotel') {
+    add('$cleanPlace hotel $cleanCity Egypt');
+    add('$cleanPlace $cleanCity');
+  } else {
+    add('$cleanPlace $cleanCity Egypt');
+    add('$cleanPlace Egypt');
+  }
+
+  return queries.toSet().take(2).toList();
+}
+
+  bool _looksAllowedForCategory(String metaText, String category) {
+    final cat = _normalizeCategory(category);
+    final lower = metaText.toLowerCase();
+
+    if (cat == 'tourist' || cat == 'outing') return true;
+
+    const touristLandmarkWords = [
+      'pyramid',
+      'pyramids',
+      'sphinx',
+      'temple',
+      'tomb',
+      'mosque',
+      'church',
+      'museum',
+      'citadel',
+      'castle',
+      'fort',
+      'ruins',
+      'monument',
+      'landmark',
+      'camel',
+      'desert',
+      'pharaoh',
+      'pharaonic',
+      'giza plateau',
+    ];
+
+    if (touristLandmarkWords.any(lower.contains)) return false;
+
+    if (cat == 'restaurant') {
+      const positive = ['restaurant', 'dining', 'food', 'meal', 'cuisine'];
+      return lower.trim().isEmpty || positive.any(lower.contains);
     }
 
-    if (cleanCity.isNotEmpty) {
-      queries.add('$cleanPlace $cleanCity Egypt');
+    if (cat == 'cafe') {
+      const positive = ['cafe', 'coffee', 'espresso', 'bakery', 'tea'];
+      return lower.trim().isEmpty || positive.any(lower.contains);
     }
-    queries.add('$cleanPlace Egypt');
 
-    return queries.where((q) => q.trim().isNotEmpty).toSet().toList();
+    if (cat == 'hotel') {
+      const positive = ['hotel', 'resort', 'room', 'lobby', 'suite', 'pool'];
+      return lower.trim().isEmpty || positive.any(lower.contains);
+    }
+
+    return true;
   }
 
   bool _looksUseful(String url) {

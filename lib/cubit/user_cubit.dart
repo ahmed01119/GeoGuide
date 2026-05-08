@@ -402,7 +402,7 @@ Future<bool> updateProfileImageCloudinary(XFile imageFile) async {
 
   // ── Chat ─────────────────────────────────────────────────────────────────
   /// [lang] is optional for backward-compat with chatbot.dart call: sendChat(text, "en")
-  Future<void> sendChat(String message, [String lang = 'en']) async {
+ Future<void> sendChat(String message, [String lang = 'en']) async {
   final clean = message.trim();
   if (clean.isEmpty) return;
 
@@ -410,6 +410,19 @@ Future<bool> updateProfileImageCloudinary(XFile imageFile) async {
 
   try {
     final result = await chatbotService.ask(clean);
+
+    debugPrint('[Chatbot] source: ${result.source}');
+    debugPrint('[Chatbot] response time: ${result.responseTimeSec}');
+    debugPrint('[Chatbot] answer: ${result.answer}');
+
+    if (result.source == ChatbotSource.error) {
+      emit(
+        ChatFailure(
+          errMessage: result.answer,
+        ),
+      );
+      return;
+    }
 
     emit(
       ChatSuccess(
@@ -422,14 +435,12 @@ Future<bool> updateProfileImageCloudinary(XFile imageFile) async {
 
     emit(
       ChatFailure(
-        errMessage:
-            'Could not connect to chatbot server. Make sure Chatbot.py is running.',
+        errMessage: 'Chat error: $e',
       ),
     );
   }
 }
 
-  
 
   @override
   Future<void> close() {
