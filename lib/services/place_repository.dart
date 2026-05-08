@@ -36,20 +36,7 @@ class PlaceRepository {
   final Set<String> _enrichingNearby = {};
 
   Landmark? get(String id) => _cache.get(id);
-
-  bool needsImageRefresh(String id) {
-    final place = _cache.get(id);
-
-    if (place == null) return true;
-
-    // لو المكان مفيهوش صور خالص، لازم نجيب صور حتى لو فيه timestamp قديم.
-    if (place.imageUrl.trim().isEmpty && place.mediaUrls.isEmpty) {
-      return true;
-    }
-
-    return _cache.needsImageRefresh(id);
-  }
-
+  bool needsImageRefresh(String id) => _cache.needsImageRefresh(id);
   bool needsWikiRefresh(String id) => _cache.needsWikiRefresh(id);
   bool needsNearbyRefresh(String id) => _cache.needsNearbyRefresh(id);
 
@@ -92,44 +79,46 @@ class PlaceRepository {
     return id;
   }
 
-  Future<void> enrichImages(Landmark existing) async {
-  try {
-    final fetched = await _images.fetchImages(
-      existing.name,
-      cityName: existing.city,
-      count: 7,
-    );
+  Future<void> enrichImages(Landmark landmark) async {
+    final id = landmark.id.trim();
+    if (id.isEmpty || _enrichingImages.contains(id)) return;
+    if (!_cache.needsImageRefresh(id)) return;
 
-    print('[DEBUG] fetched count = ${fetched.length}');
+    _enrichingImages.add(id);
+    try {
+      final existing = _cache.get(id) ?? landmark;
+      final fetched = await _images.fetchImages(
+        existing.name,
+        cityName: existing.city,
+        category: existing.category,
+        count: 7,
+        excludeUrls: [existing.imageUrl, ...existing.mediaUrls],
+      );
+      if (fetched.isEmpty) return;
 
-    if (fetched.isEmpty) {
-      print('[Images] No real images found for ${existing.name}');
-      return;
+      final merged = _mergeUrls(existing.imageUrl, existing.mediaUrls, fetched);
+      final validBefore = _validUrls(existing.mediaUrls).length +
+          (existing.imageUrl.trim().startsWith('http') ? 1 : 0);
+      final validAfter = merged.length;
+      if (validAfter <= validBefore && existing.imageUrl.trim().isNotEmpty) return;
+
+      final updated = existing.copyWith(
+        imageUrl: merged.isNotEmpty ? merged.first : existing.imageUrl,
+        mediaUrls: merged,
+        imagesRefreshedAt: DateTime.now(),
+      );
+      _cache.merge(updated);
+      await _firebase.partialUpdate(id, {
+        'imageUrl': updated.imageUrl,
+        'mediaUrls': updated.mediaUrls,
+        'imagesRefreshedAt': updated.imagesRefreshedAt!.toIso8601String(),
+      });
+    } catch (e) {
+      print('[PlaceRepository] enrichImages error: $e');
+    } finally {
+      _enrichingImages.remove(id);
     }
-
-    final images = fetched.take(6).toList();
-
-    final updated = existing.copyWith(
-      imageUrl: images.first,
-      mediaUrls: images,
-      imagesRefreshedAt: DateTime.now(),
-    );
-
-    // 🔥 أهم حاجة
-    _cache.merge(updated);
-
-    await _firebase.partialUpdate(existing.id, {
-      'imageUrl': updated.imageUrl,
-      'mediaUrls': updated.mediaUrls,
-      'imagesRefreshedAt':
-          updated.imagesRefreshedAt!.toIso8601String(),
-    });
-
-    print('[Images] SAVED for ${existing.name}');
-  } catch (e) {
-    print('[Images ERROR] $e');
   }
-}
 
   Future<void> enrichWikipedia(Landmark landmark) async {
     final id = landmark.id.trim();
@@ -139,27 +128,8 @@ class PlaceRepository {
     _enrichingWiki.add(id);
     try {
       final existing = _cache.get(id) ?? landmark;
-      final safeQuery = [
-        existing.name,
-        if (existing.city.trim().isNotEmpty) existing.city.trim(),
-        'Egypt',
-      ].join(' ');
-
-      final result = await _wikipedia.search(
-        safeQuery,
-        cityName: existing.city.trim().isNotEmpty ? existing.city : null,
-      );
+      final result = await _wikipedia.search(existing.name, cityName: existing.city);
       if (result == null) return;
-
-      if (!_isEgyptianWikiResult(
-        title: result.title,
-        summary: result.summary,
-        fullText: result.fullText,
-        cityName: existing.city,
-      )) {
-        print("[PlaceRepository] rejected non-Egypt wiki result: ${result.title}");
-        return;
-      }
 
       String history = '';
       try {
@@ -167,17 +137,9 @@ class PlaceRepository {
       } catch (_) {}
 
       final updated = existing.copyWith(
-        shortDescription: result.summary.trim().isNotEmpty
-            ? result.summary.trim()
-            : existing.shortDescription,
-        fullDescription: result.fullText.trim().isNotEmpty
-            ? result.fullText.trim()
-            : existing.fullDescription,
-        history: history.isNotEmpty
-            ? history
-            : (result.fullText.trim().isNotEmpty
-                ? result.fullText.trim()
-                : existing.history),
+        shortDescription: result.summary.trim().isNotEmpty ? result.summary.trim() : existing.shortDescription,
+        fullDescription: result.fullText.trim().isNotEmpty ? result.fullText.trim() : existing.fullDescription,
+        history: history.isNotEmpty ? history : (result.fullText.trim().isNotEmpty ? result.fullText.trim() : existing.history),
         wikipediaUrl: result.pageUrl,
         wikiEnrichedAt: DateTime.now(),
       );
@@ -230,8 +192,6 @@ class PlaceRepository {
       List<NearbyPlace> resolved = result.places;
       print('[Nearby] service result count = ${resolved.length}');
 
-      // Strong fallback: if Overpass returns too few places, derive extra nearby
-      // from same-city Firestore landmarks so the UI never looks empty.
       if (resolved.length < 8) {
         final cityLandmarks = await _firebase.getLandmarksByCity(existing.cityId);
 
@@ -337,125 +297,53 @@ class PlaceRepository {
   Future<void> toggleFavorite(Landmark place) => _firebase.toggleFavorite(place);
   Future<void> toggleVisited(Landmark place) => _firebase.toggleVisited(place);
   Future<List<Landmark>> getUserFavorites() => _firebase.getUserFavorites();
-  Stream<List<Map<String, dynamic>>> reviewsStream(String placeId) =>
-      _firebase.reviewsStream(placeId);
-  Stream<double> averageRatingStream(String placeId) =>
-      _firebase.averageRatingStream(placeId);
-  Future<void> addReview({
-    required String placeId,
-    required double rating,
-    required String comment,
-  }) =>
-      _firebase.addReview(
-        placeId: placeId,
-        rating: rating,
-        comment: comment,
-      );
+  Stream<List<Map<String, dynamic>>> reviewsStream(String placeId) => _firebase.reviewsStream(placeId);
+  Stream<double> averageRatingStream(String placeId) => _firebase.averageRatingStream(placeId);
+  Future<void> addReview({required String placeId, required double rating, required String comment}) =>
+      _firebase.addReview(placeId: placeId, rating: rating, comment: comment);
   Future<void> deleteReview({required String placeId, required String userId}) =>
       _firebase.deleteReview(placeId: placeId, userId: userId);
-  Stream<Map<String, String>> bookingLinksStream(String placeId) =>
-      _firebase.bookingLinksStream(placeId);
+  Stream<Map<String, String>> bookingLinksStream(String placeId) => _firebase.bookingLinksStream(placeId);
   Future<List<City>> getCities() => _firebase.getCities();
 
   List<Landmark> _filterAndNormalize(List<Landmark> raw) {
     final deduped = <String, Landmark>{};
     for (final lm in raw) {
-      if (lm.city.trim().isEmpty || lm.city.trim().toLowerCase() == 'egypt') {
-        continue;
-      }
-      if (!PlaceCategoryNormalizer.isAllowed(lm.category, contextText: lm.name)) {
-        continue;
-      }
+      if (lm.city.trim().isEmpty || lm.city.trim().toLowerCase() == 'egypt') continue;
+      if (!PlaceCategoryNormalizer.isAllowed(lm.category, contextText: lm.name)) continue;
       final normalized = lm.copyWith(
-        category: PlaceCategoryNormalizer.normalize(
-          lm.category,
-          contextText: lm.name,
-        ),
+        category: PlaceCategoryNormalizer.normalize(lm.category, contextText: lm.name),
       );
-      final key =
-          '${normalized.name.trim().toLowerCase()}|${normalized.city.trim().toLowerCase()}';
+      final key = '${normalized.name.trim().toLowerCase()}|${normalized.city.trim().toLowerCase()}';
       deduped[key] = normalized;
     }
     return deduped.values.toList();
   }
 
-  bool _isSafeImageUrl(String url) {
-    final clean = url.trim();
-    final lower = clean.toLowerCase();
+  List<String> _mergeUrls(String mainUrl, List<String> existing, List<String> fetched) {
+    final seen = <String>{};
+    final result = <String>[];
 
-    const genericFallbackIds = [
-      'photo-1539650116574-75c0c6d73f6e',
-      'photo-1503177119275-0aa32b3a9368',
-      'photo-1553913861-c0fddf2619ee',
-      'photo-1572252009286-268acec5ca0a',
-      'photo-1518548419970-58e3b4079ab2',
-      'photo-1578922746465-3a80a228f223',
-      'photo-1501785888041-af3ef285b470',
-      'photo-1526772662000-3f88f10405ff',
-      'photo-1500530855697-b586d89ba3ee',
-      'photo-1505761671935-60b3a7427bad',
-      'photo-1491553895911-0055eca6402d',
-      'photo-1476514525535-07fb3b4ae5f1',
-    ];
-
-    if (genericFallbackIds.any(lower.contains)) return false;
-
-    if (clean.isEmpty ||
-        !(lower.startsWith('http://') || lower.startsWith('https://'))) {
-      return false;
+    void add(String url) {
+      final clean = url.trim();
+      if (clean.isEmpty || !clean.startsWith('http')) return;
+      final key = Uri.tryParse(clean)
+              ?.replace(query: '', fragment: '')
+              .toString()
+              .toLowerCase() ??
+          clean.toLowerCase();
+      if (seen.add(key)) result.add(clean);
     }
 
-    if (lower.contains('upload.wikimedia.org') ||
-        lower.contains('commons/thumb') ||
-        lower.contains('source.unsplash.com') ||
-        lower.contains('loremflickr.com') ||
-        lower.contains('.pdf') ||
-        lower.contains('.svg') ||
-        lower.contains('.gif') ||
-        lower.contains('.tif') ||
-        lower.contains('.tiff') ||
-        lower.contains('/wiki/file:') ||
-        lower.contains('special:') ||
-        lower.endsWith('.html')) {
-      return false;
-    }
+    add(mainUrl);
+    for (final u in existing) add(u);
+    for (final u in fetched) add(u);
 
-    return true;
+    return result.take(7).toList();
   }
 
   List<String> _validUrls(List<String> urls) =>
-      urls.map((e) => e.trim()).where(_isSafeImageUrl).toList();
-
-  bool _isEgyptianWikiResult({
-    required String title,
-    required String summary,
-    required String fullText,
-    required String cityName,
-  }) {
-    final text = '$title $summary $fullText $cityName'.toLowerCase();
-    final city = cityName.trim().toLowerCase();
-
-    const signals = [
-      'egypt',
-      'egyptian',
-      'cairo',
-      'giza',
-      'luxor',
-      'aswan',
-      'alexandria',
-      'beheira',
-      'faiyum',
-      'fayoum',
-      'sinai',
-      'hurghada',
-      'sharm',
-      'dahab',
-      'siwa',
-    ];
-
-    return signals.any(text.contains) ||
-        (city.isNotEmpty && text.contains(city));
-  }
+      urls.map((e) => e.trim()).where((e) => e.startsWith('http')).toList();
 
   double _distanceKm(double lat1, double lng1, double lat2, double lng2) {
     const earthRadiusKm = 6371.0;

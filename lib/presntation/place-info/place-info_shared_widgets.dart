@@ -20,13 +20,31 @@ class _PremiumImageCarouselState extends State<_PremiumImageCarousel> {
 
   List<String> get _valid {
     final seen = <String>{};
+
+    String keyOf(String url) {
+      final clean = url.trim();
+      final lower = clean.toLowerCase();
+
+      final unsplashMatch = RegExp(r'photo-[a-z0-9\-]+').firstMatch(lower);
+      if (unsplashMatch != null) return 'unsplash:${unsplashMatch.group(0)}';
+
+      final uri = Uri.tryParse(clean);
+      if (uri == null) return lower;
+
+      final pexelsMatch =
+          RegExp(r'/(?:photos|photo)/(\d+)/?').firstMatch(uri.path.toLowerCase());
+      if (pexelsMatch != null) return 'pexels:${pexelsMatch.group(1)}';
+
+      return uri.replace(query: '', fragment: '').toString().toLowerCase();
+    }
+
     return widget.urls
         .map((u) => u.trim())
         .where((u) =>
             u.isNotEmpty &&
             u.startsWith('http') &&
             !AppInjector.images.isBadImageUrl(u) &&
-            seen.add(u))
+            seen.add(keyOf(u)))
         .take(6)
         .toList();
   }

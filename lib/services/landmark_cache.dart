@@ -193,9 +193,26 @@ class LandmarkCache {
     final seen = <String>{};
     final result = <String>[];
 
+    String keyOf(String url) {
+      final clean = url.trim();
+      final lower = clean.toLowerCase();
+
+      final unsplashMatch = RegExp(r'photo-[a-z0-9\-]+').firstMatch(lower);
+      if (unsplashMatch != null) return 'unsplash:${unsplashMatch.group(0)}';
+
+      final uri = Uri.tryParse(clean);
+      if (uri == null) return lower;
+
+      final pexelsMatch =
+          RegExp(r'/(?:photos|photo)/(\d+)/?').firstMatch(uri.path.toLowerCase());
+      if (pexelsMatch != null) return 'pexels:${pexelsMatch.group(1)}';
+
+      return uri.replace(query: '', fragment: '').toString().toLowerCase();
+    }
+
     void add(String url) {
       final clean = url.trim();
-      if (clean.isNotEmpty && _isValidUrl(clean) && seen.add(clean)) {
+      if (clean.isNotEmpty && _isValidUrl(clean) && seen.add(keyOf(clean))) {
         result.add(clean);
       }
     }

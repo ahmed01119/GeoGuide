@@ -1,36 +1,13 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ChatbotService {
-  // غيري ده لـ IPv4 بتاع اللابتوب لو هتشغلي على موبايل حقيقي
-  // static const String _laptopIp = '192.168.1.6';
+  static const String _newAiBaseUrl =
+      "https://mostafa1249687-geoguide-api.hf.space";
 
-  // static String get _newAiBaseUrl {
-  //   if (kIsWeb) return 'http://localhost:3000';
-
-  //   // Android Emulator:
-  //   return 'http://10.0.2.2:3000';
-
-  //   // Real phone:
-  //   // return 'http://$_laptopIp:3000';
-  // }
-
-static const String _newAiBaseUrl =
-    "https://mostafa1249687-geoguide-api.hf.space";
-
-  static String get _oldFlaskBaseUrl {
-    if (kIsWeb) return 'http://localhost:1234';
-
-    // Android Emulator:
-    return 'http://10.0.2.2:1234';
-
-    // Real phone:
-    // return 'http://$_laptopIp:1234';
-  }
-
-
+  static const String _ragAiBaseUrl =
+      "https://geoguide-organization-geoguide-chatbot-api.hf.space";
 
   Future<ChatbotResponse> ask(String question) async {
     final clean = question.trim();
@@ -45,30 +22,49 @@ static const String _newAiBaseUrl =
 
     final start = DateTime.now();
 
+    Object? newAiError;
+    Object? ragError;
+
     try {
       final answer = await _askNewAi(clean);
 
-      return ChatbotResponse(
-        answer: answer,
-        responseTimeSec: _elapsedSeconds(start),
-        source: ChatbotSource.newAi,
-      );
-    } catch (_) {
+      if (answer.trim().isNotEmpty) {
+        return ChatbotResponse(
+          answer: answer,
+          responseTimeSec: _elapsedSeconds(start),
+          source: ChatbotSource.newAi,
+        );
+      }
+
+      throw Exception('New AI returned empty answer');
+    } catch (e) {
+      newAiError = e;
+  print('❌ New AI failed: $newAiError');
+
+
       try {
-        final oldResponse = await _askOldFlask(clean);
-        return oldResponse.copyWith(
-          source: ChatbotSource.oldFlaskFallback,
-          responseTimeSec: oldResponse.responseTimeSec == 0
-              ? _elapsedSeconds(start)
-              : oldResponse.responseTimeSec,
-        );
+        final fallbackResponse = await _askRagFallback(clean);
+
+        if (fallbackResponse.answer.trim().isNotEmpty) {
+          return fallbackResponse.copyWith(
+            source: ChatbotSource.ragFallback,
+            responseTimeSec: fallbackResponse.responseTimeSec == 0
+                ? _elapsedSeconds(start)
+                : fallbackResponse.responseTimeSec,
+          );
+        }
+
+        throw Exception('RAG returned empty answer');
       } catch (e) {
-        return const ChatbotResponse(
-          answer:
-              'Could not connect to AI services. Make sure Bun server and Chatbot.py are running.',
-          responseTimeSec: 0,
-          source: ChatbotSource.error,
-        );
+        ragError = e;
+print('❌ RAG fallback failed: $ragError');
+        return ChatbotResponse(
+  answer:
+      'Could not connect to AI services. Please try again later.',
+  responseTimeSec: _elapsedSeconds(start),
+  source: ChatbotSource.error,
+);
+
       }
     }
   }
@@ -86,19 +82,21 @@ static const String _newAiBaseUrl =
         )
         .timeout(const Duration(seconds: 45));
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-
     if (response.statusCode != 200) {
-      throw Exception(data['error'] ?? 'New AI failed');
+      throw Exception(
+        'New AI server error: ${response.statusCode} | ${response.body}',
+      );
     }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
 
     return _formatNewAiResponse(data);
   }
 
-  Future<ChatbotResponse> _askOldFlask(String question) async {
+  Future<ChatbotResponse> _askRagFallback(String question) async {
     final response = await http
         .post(
-          Uri.parse('$_oldFlaskBaseUrl/chat'),
+          Uri.parse('$_ragAiBaseUrl/chat'),
           headers: const {
             'Content-Type': 'application/json',
           },
@@ -106,22 +104,32 @@ static const String _newAiBaseUrl =
             'question': question,
           }),
         )
-        .timeout(const Duration(seconds: 45));
+        .timeout(const Duration(seconds: 120));
 
     if (response.statusCode != 200) {
-      throw Exception('Old chatbot server error: ${response.statusCode}');
+      throw Exception(
+        'RAG fallback server error: ${response.statusCode} | ${response.body}',
+      );
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
 
+    if (data['error'] != null) {
+      throw Exception('RAG API error: ${data['error']} ${data['details'] ?? ''}');
+    }
+
     return ChatbotResponse(
       answer: (data['answer'] ?? 'No answer found.').toString(),
       responseTimeSec: ((data['response_time_sec'] ?? 0) as num).toDouble(),
-      source: ChatbotSource.oldFlaskFallback,
+      source: ChatbotSource.ragFallback,
     );
   }
 
   String _formatNewAiResponse(Map<String, dynamic> data) {
+    if (data['answer'] != null) {
+      return data['answer'].toString().trim();
+    }
+
     final title = data['title']?.toString() ?? '';
     final location = data['location']?.toString() ?? '';
     final content = data['content']?.toString() ?? '';
@@ -160,7 +168,13 @@ static const String _newAiBaseUrl =
       }
     }
 
-    return buffer.toString().trim();
+    final result = buffer.toString().trim();
+
+    if (result.isEmpty) {
+      throw Exception('New AI response format is empty: $data');
+    }
+
+    return result;
   }
 
   double _elapsedSeconds(DateTime start) {
@@ -171,6 +185,7 @@ static const String _newAiBaseUrl =
 enum ChatbotSource {
   none,
   newAi,
+  ragFallback,
   oldFlaskFallback,
   error,
 }
