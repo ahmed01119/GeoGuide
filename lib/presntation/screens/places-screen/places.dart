@@ -2,6 +2,7 @@
 
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/presntation/place-info/place-info.dart';
 
@@ -31,9 +32,8 @@ class Places extends StatelessWidget {
     final isTablet = shortest >= 600;
 
     final horizontalPadding = _r(width * 0.043, 14, 24);
-    final headerHeight = isTablet
-    ? _r(height * 0.22, 300, 380)
-    : _r(height * 0.20, 270, 330);
+    final headerHeight =
+        isTablet ? _r(height * 0.22, 300, 380) : _r(height * 0.20, 270, 330);
 
     final glassPadding = _r(width * 0.043, 14, 20);
     final glassTop = media.padding.top + 72;
@@ -59,7 +59,7 @@ class Places extends StatelessWidget {
                 onTap: () => Navigator.pop(context),
               ),
             ),
-            backgroundColor: const Color(0xFF8D6E63),
+            backgroundColor: AppColors.chestnutBrown,
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -70,9 +70,7 @@ class Places extends StatelessWidget {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Color(0xFFA67C52),
-                          Color(0xFF8D6E63),
-                          Color(0xFF5D4037),
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),
@@ -92,23 +90,19 @@ class Places extends StatelessWidget {
                       ),
                     ),
                   ),
-
-                 
-
                   Positioned(
                     left: horizontalPadding,
                     right: horizontalPadding,
-                    
                     bottom: _r(height * 0.018, 14, 22),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                         child: Container(
-                          padding:EdgeInsets.symmetric(
-    horizontal: glassPadding,
-    vertical: glassPadding * 0.6, 
-  ),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: glassPadding,
+                            vertical: glassPadding * 0.6,
+                          ),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.14),
                             borderRadius: BorderRadius.circular(24),
@@ -122,8 +116,7 @@ class Places extends StatelessWidget {
                               final titleSize = compact
                                   ? _r(width * 0.060, 22, 25)
                                   : _r(width * 0.064, 24, 28);
-                              final subtitleSize =
-                                  _r(width * 0.034, 12.5, 14);
+                              final subtitleSize = _r(width * 0.034, 12.5, 14);
                               final badgeSize = _r(width * 0.030, 11.5, 12.5);
 
                               return FittedBox(
@@ -140,8 +133,7 @@ class Places extends StatelessWidget {
                                     children: [
                                       Container(
                                         padding: EdgeInsets.symmetric(
-                                          horizontal:
-                                              _r(width * 0.032, 11, 13),
+                                          horizontal: _r(width * 0.032, 11, 13),
                                           vertical: _r(height * 0.008, 6, 8),
                                         ),
                                         decoration: BoxDecoration(

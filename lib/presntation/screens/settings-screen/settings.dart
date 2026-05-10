@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/constants/app_text.dart';
 import 'package:geoguide/cubit/user_cubit.dart';
 import 'package:geoguide/presntation/screens/settings-screen/settings-widgets/edit_name_dialog.dart';
@@ -57,7 +58,7 @@ class Settings extends StatelessWidget {
             stretch: true,
             toolbarHeight: 66,
             leadingWidth: 72,
-            backgroundColor: const Color(0xFF8D6E63),
+            backgroundColor: AppColors.chestnutBrown,
             leading: Padding(
               padding: EdgeInsets.only(
                 left: horizontalPadding,
@@ -79,9 +80,7 @@ class Settings extends StatelessWidget {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Color(0xFFA67C52),
-                          Color(0xFF8D6E63),
-                          Color(0xFF5D4037),
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),

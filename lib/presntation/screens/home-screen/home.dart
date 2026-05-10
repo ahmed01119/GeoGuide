@@ -81,6 +81,24 @@ class _HomeState extends State<Home> {
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _suggestionDebounce;
 
+  void _showHomeNotification(
+    String message, {
+    Color? backgroundColor,
+  }) {
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: backgroundColor ?? const Color.fromARGB(255, 42, 40, 40),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -318,7 +336,7 @@ class _HomeState extends State<Home> {
             ),
           ),
         ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+        floatingActionButtonLocation: const _FixedCenterDockedFabLocation(),
         bottomNavigationBar: const CustomBottomNavBar(),
       ),
     );
@@ -551,5 +569,21 @@ class _HomeState extends State<Home> {
         ],
       ),
     );
+  }
+}
+
+class _FixedCenterDockedFabLocation extends FloatingActionButtonLocation {
+  const _FixedCenterDockedFabLocation();
+
+  @override
+  Offset getOffset(ScaffoldPrelayoutGeometry scaffoldGeometry) {
+    final fabWidth = scaffoldGeometry.floatingActionButtonSize.width;
+    final fabHeight = scaffoldGeometry.floatingActionButtonSize.height;
+    final scaffoldSize = scaffoldGeometry.scaffoldSize;
+
+    final dx = (scaffoldSize.width - fabWidth) / 2;
+    final dy = scaffoldGeometry.contentBottom - (fabHeight / 2);
+
+    return Offset(dx, dy);
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/presntation/place-info/place-info.dart';
 import 'package:geoguide/presntation/widgets/place_weather_chip.dart';
@@ -51,7 +52,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
             expandedHeight: 250,
             pinned: true,
             stretch: true,
-            backgroundColor: const Color(0xFF8D6E63),
+            backgroundColor: AppColors.chestnutBrown,
             leading: Padding(
               padding: const EdgeInsets.all(8),
               child: _GlassIconButton(
@@ -69,9 +70,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Color(0xFFA67C52),
-                          Color(0xFF8D6E63),
-                          Color(0xFF5D4037),
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),
@@ -162,7 +161,6 @@ class _FavoritesPageState extends State<FavoritesPage> {
               ),
             ),
           ),
-
           SliverToBoxAdapter(
             child: Transform.translate(
               offset: const Offset(0, -10),
@@ -380,8 +378,7 @@ class _FavoriteCard extends StatelessWidget {
                                 ),
                               );
                             },
-                            errorBuilder: (_, __, ___) =>
-                                const _Placeholder(),
+                            errorBuilder: (_, __, ___) => const _Placeholder(),
                           ),
                   ),
                 ),

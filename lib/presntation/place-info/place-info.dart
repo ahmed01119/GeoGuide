@@ -12,31 +12,25 @@ import 'dart:async';
 
 // ignore_for_file: avoid_print
 
-import 'dart:async';
 import 'dart:ui';
-
-import 'dart:convert';
 import 'package:geoguide/services/firebase_nearby_cache_extension.dart';
 import 'package:geoguide/services/nearby-service.dart';
-import 'package:http/http.dart' as http;
-
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geoguide/constants/app_injector.dart';
 import 'package:url_launcher/url_launcher.dart';
-
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/services/firebase_service.dart';
 import 'package:geoguide/services/place_repository.dart';
 import 'package:geoguide/services/weather_service.dart';
 import 'package:geoguide/presntation/widgets/place_weather_chip.dart';
-
 part 'place-info_tabs.dart';
 part 'place-info_nearby_booking.dart';
 part 'place-info_shared_widgets.dart';
 
 // ── Theme ────────────────────────────────────────────────────
-const _kBrown = Color(0xFF5C4033);
+const _kBrown = AppColors.chestnutBrown;
 const _kBrownMed = Color(0xFF8D6E63);
 const _kBrownLight = Color(0xFFF4ECE5);
 const _kBg = Color(0xFFF7F1EB);
@@ -226,8 +220,8 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
       final uri = Uri.tryParse(clean);
       if (uri == null) return lower;
 
-      final pexelsMatch =
-          RegExp(r'/(?:photos|photo)/(\d+)/?').firstMatch(uri.path.toLowerCase());
+      final pexelsMatch = RegExp(r'/(?:photos|photo)/(\d+)/?')
+          .firstMatch(uri.path.toLowerCase());
       if (pexelsMatch != null) return 'pexels:${pexelsMatch.group(1)}';
 
       return uri.replace(query: '', fragment: '').toString().toLowerCase();
@@ -567,7 +561,7 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
                                 ),
                                 child: TabBar(
                                   controller: _tabController,
-                                  isScrollable: true,
+                                  isScrollable: false,
                                   indicator: BoxDecoration(
                                     color: _kBrown,
                                     borderRadius: BorderRadius.circular(14),
