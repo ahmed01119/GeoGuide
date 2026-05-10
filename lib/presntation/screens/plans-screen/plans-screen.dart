@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/presntation/screens/home-screen/planner-screen.dart';
 import 'package:geoguide/services/firebase_service.dart';
@@ -24,7 +25,7 @@ class SavedPlansPage extends StatelessWidget {
             expandedHeight: 220,
             pinned: true,
             stretch: true,
-            backgroundColor: const Color(0xFF8D6E63),
+            backgroundColor: AppColors.chestnutBrown,
             leading: Padding(
               padding: const EdgeInsets.all(8),
               child: _GlassIconButton(
@@ -42,9 +43,7 @@ class SavedPlansPage extends StatelessWidget {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Color(0xFFA67C52),
-                          Color(0xFF8D6E63),
-                          Color(0xFF5D4037),
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),
@@ -195,7 +194,8 @@ class SavedPlansPage extends StatelessWidget {
                                       (plan['id'] ?? '').toString().trim();
                                   if (planId.isEmpty) {
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
                                         const SnackBar(
                                           content: Text(
                                             'Could not delete this plan.',

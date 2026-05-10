@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/cubit/user_cubit.dart';
 import 'package:geoguide/presntation/screens/chatbot-screen/chatbot-widgets/chat_background.dart';
 import 'package:geoguide/presntation/screens/chatbot-screen/chatbot-widgets/chat_input_field.dart';
@@ -144,7 +145,7 @@ class _ChatBotPageState extends State<ChatBotPage> {
                               padding: EdgeInsets.only(top: 80),
                               child: Center(
                                 child: CircularProgressIndicator(
-                                  color: Color(0xFF8D6E63),
+                                  color: AppColors.chestnutBrown,
                                 ),
                               ),
                             ),
@@ -191,8 +192,7 @@ class _ChatBotPageState extends State<ChatBotPage> {
                                 sliver: SliverList(
                                   delegate: SliverChildBuilderDelegate(
                                     (context, index) {
-                                      if (_isLoading &&
-                                          index == docs.length) {
+                                      if (_isLoading && index == docs.length) {
                                         return const _TypingBubble();
                                       }
 
@@ -234,7 +234,7 @@ class _ChatBotPageState extends State<ChatBotPage> {
       pinned: true,
       stretch: true,
       elevation: 0,
-      backgroundColor: const Color(0xFF5D4037),
+      backgroundColor: AppColors.chestnutBrown,
       leadingWidth: 64,
       leading: Padding(
         padding: const EdgeInsets.only(left: 12, top: 6, bottom: 6),
@@ -263,9 +263,7 @@ class _ChatBotPageState extends State<ChatBotPage> {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [
-                    Color(0xFFA67C52),
-                    Color(0xFF8D6E63),
-                    Color(0xFF5D4037),
+                    AppColors.chestnutBrown,
                   ],
                 ),
               ),

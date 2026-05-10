@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geoguide/constants/app_colors.dart';
 
 class ChatInputField extends StatelessWidget {
   final TextEditingController controller;
@@ -61,7 +62,7 @@ class ChatInputField extends StatelessWidget {
           Container(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF8D6E63),
+              color: AppColors.chestnutBrown,
               boxShadow: [
                 BoxShadow(
                   color: const Color(0xFF8D6E63).withOpacity(0.22),

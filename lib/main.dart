@@ -21,7 +21,8 @@ import 'package:geoguide/services/auth_service.dart';
 import 'package:geoguide/utils/city_seader.dart';
 
 Future<void> clearBadImageLinksFromFirestore() async {
-  final snapshot = await FirebaseFirestore.instance.collection('landmarks').get();
+  final snapshot =
+      await FirebaseFirestore.instance.collection('landmarks').get();
 
   for (final doc in snapshot.docs) {
     final data = doc.data();
@@ -46,7 +47,8 @@ Future<void> clearBadImageLinksFromFirestore() async {
 }
 
 Future<void> clearImagesFromFirestore() async {
-  final snapshot = await FirebaseFirestore.instance.collection('landmarks').get();
+  final snapshot =
+      await FirebaseFirestore.instance.collection('landmarks').get();
 
   for (final doc in snapshot.docs) {
     await doc.reference.update({

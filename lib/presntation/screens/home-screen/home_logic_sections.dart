@@ -13,9 +13,8 @@ extension _HomeLogicSections on _HomeState {
       if (!mounted) return;
 
       final storedOnly = _prepareHomePlaces(all);
-      final placesToShow = storedOnly.isNotEmpty
-          ? storedOnly
-          : _localEgyptSeedPlaces();
+      final placesToShow =
+          storedOnly.isNotEmpty ? storedOnly : _localEgyptSeedPlaces();
 
       setState(() {
         // Show database/local seed data immediately.
@@ -107,7 +106,8 @@ extension _HomeLogicSections on _HomeState {
         }
       });
 
-      print('[Home] background All Egypt highlights generation done: ${valid.length}');
+      print(
+          '[Home] background All Egypt highlights generation done: ${valid.length}');
     } catch (e) {
       print('[Home] background All Egypt generation error: $e');
     }
@@ -182,10 +182,12 @@ extension _HomeLogicSections on _HomeState {
       // 3) Smart background generation. It runs only when famous tourist/outing
       // places are missing, and only once per city in this app session unless
       // forceRefresh=true.
-      if (forceRefresh || _shouldGenerateCityHighlights(storedCityPlaces, city)) {
+      if (forceRefresh ||
+          _shouldGenerateCityHighlights(storedCityPlaces, city)) {
         unawaited(Future<void>.delayed(
           const Duration(milliseconds: 750),
-          () => _refreshCityTouristPlacesInBackground(city, force: forceRefresh),
+          () =>
+              _refreshCityTouristPlacesInBackground(city, force: forceRefresh),
         ));
       }
     } catch (e) {
@@ -205,12 +207,14 @@ extension _HomeLogicSections on _HomeState {
   }) async {
     final key = 'city_highlights_${_normalizeCityText(city.name)}';
     if (!force && !_homeBackgroundGenerationKeys.add(key)) {
-      print('[Home] skip duplicate background tourist generation for ${city.name}');
+      print(
+          '[Home] skip duplicate background tourist generation for ${city.name}');
       return;
     }
 
     try {
-      print('[Home] background tourist/outing generation started for ${city.name}');
+      print(
+          '[Home] background tourist/outing generation started for ${city.name}');
       final before = _prepareHomePlaces([
         ..._cityLandmarks,
         ..._landmarksForCity(_allLandmarks, city),
@@ -241,7 +245,8 @@ extension _HomeLogicSections on _HomeState {
         );
       });
 
-      print('[Home] background tourist/outing generation done for ${city.name}: ${valid.length}');
+      print(
+          '[Home] background tourist/outing generation done for ${city.name}: ${valid.length}');
     } catch (e) {
       print('[Home] background tourist generation error for ${city.name}: $e');
     }
@@ -387,7 +392,8 @@ extension _HomeLogicSections on _HomeState {
         // Keep generated/saved search results immediately available in Home.
         // This prevents the searched place from disappearing until the next app reload.
         if (cleanedResults.isNotEmpty) {
-          _allLandmarks = _filterAndDedup([...cleanedResults, ..._allLandmarks]);
+          _allLandmarks =
+              _filterAndDedup([...cleanedResults, ..._allLandmarks]);
 
           final selected = _selectedCity;
           if (selected != null) {
@@ -396,7 +402,8 @@ extension _HomeLogicSections on _HomeState {
                 .toList();
 
             if (cityMatches.isNotEmpty) {
-              _cityLandmarks = _filterAndDedup([...cityMatches, ..._cityLandmarks]);
+              _cityLandmarks =
+                  _filterAndDedup([...cityMatches, ..._cityLandmarks]);
             }
           }
         }
@@ -428,7 +435,6 @@ extension _HomeLogicSections on _HomeState {
     });
   }
 
-
   List<Landmark> _localEgyptSeedPlaces() {
     const data = [
       ('Great Pyramid of Giza', 'Giza', 'Giza Plateau', 29.9792, 31.1342),
@@ -442,15 +448,39 @@ extension _HomeLogicSections on _HomeState {
       ('Luxor Temple', 'Luxor', 'Luxor City', 25.6994, 32.6392),
       ('Karnak Temple', 'Luxor', 'Karnak, Luxor', 25.7188, 32.6573),
       ('Valley of the Kings', 'Luxor', 'West Bank, Luxor', 25.7402, 32.6014),
-      ('Temple of Hatshepsut', 'Luxor', 'Deir el-Bahari, Luxor', 25.7382, 32.6066),
+      (
+        'Temple of Hatshepsut',
+        'Luxor',
+        'Deir el-Bahari, Luxor',
+        25.7382,
+        32.6066
+      ),
       ('Abu Simbel Temples', 'Aswan', 'Abu Simbel, Aswan', 22.3372, 31.6258),
       ('Philae Temple', 'Aswan', 'Agilkia Island, Aswan', 24.0251, 32.8840),
       ('Temple of Kom Ombo', 'Aswan', 'Kom Ombo, Aswan', 24.4522, 32.9286),
       ('Temple of Edfu', 'Aswan', 'Edfu, Aswan', 24.9777, 32.8734),
-      ('Bibliotheca Alexandrina', 'Alexandria', 'Alexandria Corniche', 31.2089, 29.9092),
-      ('Citadel of Qaitbay', 'Alexandria', 'Eastern Harbor, Alexandria', 31.2140, 29.8856),
+      (
+        'Bibliotheca Alexandrina',
+        'Alexandria',
+        'Alexandria Corniche',
+        31.2089,
+        29.9092
+      ),
+      (
+        'Citadel of Qaitbay',
+        'Alexandria',
+        'Eastern Harbor, Alexandria',
+        31.2140,
+        29.8856
+      ),
       ('Montaza Palace', 'Alexandria', 'Montaza, Alexandria', 31.2875, 30.0156),
-      ('Catacombs of Kom El Shoqafa', 'Alexandria', 'Kom El Shoqafa, Alexandria', 31.1786, 29.8929),
+      (
+        'Catacombs of Kom El Shoqafa',
+        'Alexandria',
+        'Kom El Shoqafa, Alexandria',
+        31.1786,
+        29.8929
+      ),
       ('Siwa Oasis', 'Siwa', 'Siwa, Matrouh', 29.2032, 25.5195),
     ];
 
@@ -504,11 +534,14 @@ extension _HomeLogicSections on _HomeState {
 
       for (final place in clean) {
         if (!_isTouristPlace(place) &&
-            PlaceCategoryNormalizer.normalize(place.category, contextText: place.name) != 'outing') {
+            PlaceCategoryNormalizer.normalize(place.category,
+                    contextText: place.name) !=
+                'outing') {
           continue;
         }
 
-        final key = '${_normalizeCityText(place.name)}|${_normalizeCityText(place.city)}';
+        final key =
+            '${_normalizeCityText(place.name)}|${_normalizeCityText(place.city)}';
         if (!seen.add(key)) continue;
 
         final cityForPlace = _cityForLandmark(place, defaultCity: defaultCity);
@@ -517,7 +550,8 @@ extension _HomeLogicSections on _HomeState {
 
         final toSave = place.copyWith(
           // local/temporary UI ids must not be used as Firestore ids.
-          id: place.id.startsWith('local_seed_') || place.id.startsWith('overpass_')
+          id: place.id.startsWith('local_seed_') ||
+                  place.id.startsWith('overpass_')
               ? ''
               : place.id,
           cityId: cityId,
@@ -568,7 +602,9 @@ extension _HomeLogicSections on _HomeState {
     for (final city in _cities) {
       final cityText = _normalizeCityText(city.name);
       if (cityText.isEmpty) continue;
-      if (placeCity == cityText || placeAddress.contains(cityText) || placeText.contains(cityText)) {
+      if (placeCity == cityText ||
+          placeAddress.contains(cityText) ||
+          placeText.contains(cityText)) {
         return city;
       }
     }
@@ -712,7 +748,8 @@ extension _HomeLogicSections on _HomeState {
 
       if (result.days.isEmpty || result.days.every((d) => d.isEmpty)) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Not enough places to generate a plan.')),
+          const SnackBar(
+              content: Text('Not enough places to generate a plan.')),
         );
         return;
       }
@@ -737,7 +774,8 @@ extension _HomeLogicSections on _HomeState {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not generate plan. Please try again.')),
+          const SnackBar(
+              content: Text('Could not generate plan. Please try again.')),
         );
       }
     } finally {
@@ -803,7 +841,8 @@ extension _HomeLogicSections on _HomeState {
     list.sort((a, b) {
       final famousCompare = cityName == null
           ? _famousEgyptScore(b).compareTo(_famousEgyptScore(a))
-          : _famousCityScore(b, cityName).compareTo(_famousCityScore(a, cityName));
+          : _famousCityScore(b, cityName)
+              .compareTo(_famousCityScore(a, cityName));
       if (famousCompare != 0) return famousCompare;
       return _placeScore(b).compareTo(_placeScore(a));
     });
@@ -841,7 +880,9 @@ extension _HomeLogicSections on _HomeState {
     };
 
     for (final entry in famous.entries) {
-      if (name == entry.key || name.contains(entry.key) || entry.key.contains(name)) {
+      if (name == entry.key ||
+          name.contains(entry.key) ||
+          entry.key.contains(name)) {
         return entry.value;
       }
     }
@@ -875,7 +916,9 @@ extension _HomeLogicSections on _HomeState {
     if (_selectedCity == null) return [];
 
     final base = (_searchActive && _searchResults.isNotEmpty)
-        ? _searchResults.where((p) => _landmarkMatchesCity(p, _selectedCity!)).toList()
+        ? _searchResults
+            .where((p) => _landmarkMatchesCity(p, _selectedCity!))
+            .toList()
         : _filterAndDedup([
             ..._cityLandmarks,
             ..._landmarksForCity(_allLandmarks, _selectedCity!),
@@ -885,8 +928,6 @@ extension _HomeLogicSections on _HomeState {
     result.sort((a, b) => _plannerScore(b).compareTo(_plannerScore(a)));
     return result;
   }
-
-
 
   List<Landmark> _prepareHomePlaces(List<Landmark> items) {
     return _filterAndDedup(items)
@@ -924,7 +965,8 @@ extension _HomeLogicSections on _HomeState {
     };
     if (blockedExact.contains(name)) return false;
 
-    if (RegExp(r'\b(street|road|avenue|district|area|zone|neighborhood|neighbourhood|city|village|town)\b')
+    if (RegExp(
+            r'\b(street|road|avenue|district|area|zone|neighborhood|neighbourhood|city|village|town)\b')
         .hasMatch(name)) {
       return false;
     }
@@ -1045,7 +1087,9 @@ extension _HomeLogicSections on _HomeState {
 
     final map = byCity[city] ?? const <String, int>{};
     for (final entry in map.entries) {
-      if (name == entry.key || name.contains(entry.key) || entry.key.contains(name)) {
+      if (name == entry.key ||
+          name.contains(entry.key) ||
+          entry.key.contains(name)) {
         return entry.value;
       }
     }
@@ -1100,7 +1144,8 @@ extension _HomeLogicSections on _HomeState {
         'القاهره',
       ];
       final combined = '$lmCity $lmAddress $lmDescription';
-      if (cairoAreas.any((area) => combined.contains(_normalizeCityText(area)))) {
+      if (cairoAreas
+          .any((area) => combined.contains(_normalizeCityText(area)))) {
         return true;
       }
     }
@@ -1125,7 +1170,8 @@ extension _HomeLogicSections on _HomeState {
     final touristOuting = _touristAndOutingOnly(stored);
     if (touristOuting.length < 12) return true;
 
-    final famousScore = touristOuting.where((lm) => _famousEgyptScore(lm) > 0).length;
+    final famousScore =
+        touristOuting.where((lm) => _famousEgyptScore(lm) > 0).length;
     return famousScore < 10;
   }
 
@@ -1167,11 +1213,13 @@ extension _HomeLogicSections on _HomeState {
     final result = <Landmark>[];
     for (final lm in items) {
       if (lm.name.trim().isEmpty) continue;
-      if (!PlaceCategoryNormalizer.isAllowed(lm.category, contextText: lm.name)) {
+      if (!PlaceCategoryNormalizer.isAllowed(lm.category,
+          contextText: lm.name)) {
         continue;
       }
       final clearName = _clearDisplayName(lm.name);
-      final key = '${clearName.trim().toLowerCase()}|${lm.city.trim().toLowerCase()}';
+      final key =
+          '${clearName.trim().toLowerCase()}|${lm.city.trim().toLowerCase()}';
       if (seen.add(key)) result.add(lm.copyWith(name: clearName));
     }
     return result;
@@ -1183,7 +1231,8 @@ extension _HomeLogicSections on _HomeState {
         (lm.imageUrl.trim().isNotEmpty ? 4 : 0) +
         (lm.shortDescription.trim().isNotEmpty ? 2 : 0);
 
-    final cat = PlaceCategoryNormalizer.normalize(lm.category, contextText: lm.name);
+    final cat =
+        PlaceCategoryNormalizer.normalize(lm.category, contextText: lm.name);
     if (cat == 'tourist') score += 12;
     if (cat == 'outing') score += 6;
     if (cat == 'restaurant') score += 3;
@@ -1255,50 +1304,69 @@ extension _HomeLogicSections on _HomeState {
 
   void _scrollRight() {
     if (!_scrollCtrl.hasClients) return;
-    final next = (_scrollCtrl.offset + 200).clamp(0.0, _scrollCtrl.position.maxScrollExtent);
+    final next = (_scrollCtrl.offset + 200)
+        .clamp(0.0, _scrollCtrl.position.maxScrollExtent);
     _scrollCtrl.animateTo(next,
         duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
   }
 
   void _scrollLeft() {
     if (!_scrollCtrl.hasClients) return;
-    final prev = (_scrollCtrl.offset - 200).clamp(0.0, _scrollCtrl.position.maxScrollExtent);
+    final prev = (_scrollCtrl.offset - 200)
+        .clamp(0.0, _scrollCtrl.position.maxScrollExtent);
     _scrollCtrl.animateTo(prev,
         duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
   }
 
   Future<void> _openCamera() async {
-  try {
-    final XFile? image = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 70,
-      maxWidth: 1200,
-      maxHeight: 1200,
-    );
+    bool dialogShown = false;
 
-    if (image == null) return;
+    try {
+      final picked = await _picker.pickImage(
+        source: kIsWeb ? ImageSource.gallery : ImageSource.camera,
+        imageQuality: 85,
+      );
 
-    final AiImageDetails details =
-        await LandmarkImageAiService().describeImage(image);
+      if (picked == null) return;
+      if (!mounted) return;
 
-    if (!mounted) return;
+      dialogShown = true;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(
+          child: CircularProgressIndicator(color: AppColors.chestnutBrown),
+        ),
+      );
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => AiImageDetailsScreen(details: details),
-      ),
-    );
-  } catch (e) {
-    debugPrint('Camera AI error: $e');
+      final details = await LandmarkImageAiService().describeImage(picked);
+      if (!mounted) return;
 
-    if (!mounted) return;
+      if (dialogShown) {
+        Navigator.pop(context);
+        dialogShown = false;
+      }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Image AI error: $e'),
-      ),
-    );
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AiImageDetailsScreen(
+            imageFile: picked,
+            details: details,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      if (dialogShown) {
+        Navigator.pop(context);
+      }
+
+      _showHomeNotification(
+        'Could not analyze image: $e',
+        backgroundColor: AppColors.chestnutBrown,
+      );
+    }
   }
-}
 }

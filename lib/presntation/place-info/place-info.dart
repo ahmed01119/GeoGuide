@@ -16,8 +16,12 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'dart:convert';
+<<<<<<< HEAD
 import 'package:geoguide/services/firebase_nearby_cache_extension.dart';
 import 'package:geoguide/services/nearby-service.dart';
+=======
+import 'package:geoguide/constants/app_colors.dart';
+>>>>>>> 365119e (upgrad ui)
 import 'package:http/http.dart' as http;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -36,7 +40,7 @@ part 'place-info_nearby_booking.dart';
 part 'place-info_shared_widgets.dart';
 
 // ── Theme ────────────────────────────────────────────────────
-const _kBrown = Color(0xFF5C4033);
+const _kBrown = AppColors.chestnutBrown;
 const _kBrownMed = Color(0xFF8D6E63);
 const _kBrownLight = Color(0xFFF4ECE5);
 const _kBg = Color(0xFFF7F1EB);
@@ -567,7 +571,7 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
                                 ),
                                 child: TabBar(
                                   controller: _tabController,
-                                  isScrollable: true,
+                                  isScrollable: false,
                                   indicator: BoxDecoration(
                                     color: _kBrown,
                                     borderRadius: BorderRadius.circular(14),

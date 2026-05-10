@@ -34,13 +34,24 @@ class _SettingsSectionState extends State<SettingsSection> {
   bool _showCountryOptions = false;
 
   final List<String> _countries = [
-    'Egypt', 'France', 'United States', 'Germany', 'Italy',
-    'United Kingdom', 'Spain', 'Canada', 'Brazil',
-    'Saudi Arabia', 'UAE', 'Turkey', 'Japan', 'China', 'India',
+    'Egypt',
+    'France',
+    'United States',
+    'Germany',
+    'Italy',
+    'United Kingdom',
+    'Spain',
+    'Canada',
+    'Brazil',
+    'Saudi Arabia',
+    'UAE',
+    'Turkey',
+    'Japan',
+    'China',
+    'India',
   ];
 
-  String get _currentEmail =>
-      FirebaseAuth.instance.currentUser?.email ?? '';
+  String get _currentEmail => FirebaseAuth.instance.currentUser?.email ?? '';
 
   @override
   Widget build(BuildContext context) {
@@ -57,22 +68,22 @@ class _SettingsSectionState extends State<SettingsSection> {
               ? 'No name'
               : widget.nameController.text,
           onTap: () async {
-  final result = await showDialog<String>(
-    context: context,
-    builder: (_) => BlocProvider.value(
-      value: context.read<UserCubit>(),
-      child: EditNameDialog(
-        currentName: widget.nameController.text,
-      ),
-    ),
-  );
+            final result = await showDialog<String>(
+              context: context,
+              builder: (_) => BlocProvider.value(
+                value: context.read<UserCubit>(),
+                child: EditNameDialog(
+                  currentName: widget.nameController.text,
+                ),
+              ),
+            );
 
-  if (result != null && result.trim().isNotEmpty) {
-    setState(() {
-      widget.nameController.text = result.trim();
-    });
-  }
-},
+            if (result != null && result.trim().isNotEmpty) {
+              setState(() {
+                widget.nameController.text = result.trim();
+              });
+            }
+          },
           isEditable: true,
         ),
 
@@ -80,9 +91,7 @@ class _SettingsSectionState extends State<SettingsSection> {
         _buildCard(
           icon: Icons.email_rounded,
           title: AppText.email,
-          value: _currentEmail.isNotEmpty
-              ? _currentEmail
-              : 'Not available',
+          value: _currentEmail.isNotEmpty ? _currentEmail : 'Not available',
         ),
 
         // ── Password (smart based on auth provider) ────────────────────
@@ -104,8 +113,7 @@ class _SettingsSectionState extends State<SettingsSection> {
                 MaterialPageRoute(
                   builder: (_) => BlocProvider.value(
                     value: cubit,
-                    child: const ResetPassword(
-                        needCurrentPassword: true),
+                    child: const ResetPassword(needCurrentPassword: true),
                   ),
                 ),
               );
@@ -115,30 +123,30 @@ class _SettingsSectionState extends State<SettingsSection> {
 
         // ── Phone ──────────────────────────────────────────────────────
         _buildCard(
-  icon: Icons.phone_rounded,
-  title: AppText.phone,
-  value: widget.phoneController.text.isEmpty
-      ? AppText.addNumber
-      : widget.phoneController.text,
-  onTap: () async {
-    final result = await showDialog<String>(
-      context: context,
-      builder: (_) => BlocProvider.value(
-        value: cubit,
-        child: EditPhoneDialog(
-          currentPhone: widget.phoneController.text,
-        ),
-      ),
-    );
+          icon: Icons.phone_rounded,
+          title: AppText.phone,
+          value: widget.phoneController.text.isEmpty
+              ? AppText.addNumber
+              : widget.phoneController.text,
+          onTap: () async {
+            final result = await showDialog<String>(
+              context: context,
+              builder: (_) => BlocProvider.value(
+                value: cubit,
+                child: EditPhoneDialog(
+                  currentPhone: widget.phoneController.text,
+                ),
+              ),
+            );
 
-    if (result != null && result.trim().isNotEmpty) {
-      setState(() {
-        widget.phoneController.text = result.trim();
-      });
-    }
-  },
-  isEditable: true,
-),
+            if (result != null && result.trim().isNotEmpty) {
+              setState(() {
+                widget.phoneController.text = result.trim();
+              });
+            }
+          },
+          isEditable: true,
+        ),
 
         // ── Country ────────────────────────────────────────────────────
         _buildCard(
@@ -172,17 +180,14 @@ class _SettingsSectionState extends State<SettingsSection> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(
           children: [
-            Icon(Icons.info_outline_rounded,
-                color: Color(0xFF8D6E63)),
+            Icon(Icons.info_outline_rounded, color: Color(0xFF8D6E63)),
             SizedBox(width: 8),
             Text('Google Account',
                 style: TextStyle(
-                    color: Color(0xFF2E251F),
-                    fontWeight: FontWeight.w800)),
+                    color: Color(0xFF2E251F), fontWeight: FontWeight.w800)),
           ],
         ),
         content: const Text(
@@ -190,14 +195,12 @@ class _SettingsSectionState extends State<SettingsSection> {
           'managed by Google.\n\n'
           'To change your password, please visit your Google '
           'Account settings at myaccount.google.com.',
-          style: TextStyle(
-              color: Color(0xFF5E544D), height: 1.5),
+          style: TextStyle(color: Color(0xFF5E544D), height: 1.5),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('OK',
-                style: TextStyle(color: Color(0xFF8D6E63))),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF8D6E63))),
           ),
         ],
       ),
@@ -209,14 +212,11 @@ class _SettingsSectionState extends State<SettingsSection> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Logout',
             style: TextStyle(
-                color: Color(0xFF2E251F),
-                fontWeight: FontWeight.w800)),
-        content: const Text(
-            'Are you sure you want to log out?',
+                color: Color(0xFF2E251F), fontWeight: FontWeight.w800)),
+        content: const Text('Are you sure you want to log out?',
             style: TextStyle(color: Color(0xFF5E544D))),
         actions: [
           TextButton(
@@ -234,8 +234,7 @@ class _SettingsSectionState extends State<SettingsSection> {
                 (route) => false,
               );
             },
-            child: const Text('Logout',
-                style: TextStyle(color: Colors.red)),
+            child: const Text('Logout', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -265,7 +264,7 @@ class _SettingsSectionState extends State<SettingsSection> {
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: AppColors.transparentDarkCocoa,
                 blurRadius: 14,
                 offset: const Offset(0, 6),
               ),
@@ -284,9 +283,7 @@ class _SettingsSectionState extends State<SettingsSection> {
                 ),
                 child: Icon(
                   icon,
-                  color: isDanger
-                      ? Colors.red
-                      : const Color(0xFF8D6E63),
+                  color: isDanger ? Colors.red : const Color(0xFF8D6E63),
                 ),
               ),
               const SizedBox(width: 12),
@@ -298,9 +295,7 @@ class _SettingsSectionState extends State<SettingsSection> {
                       title,
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
-                        color: isDanger
-                            ? Colors.red
-                            : const Color(0xFF2E251F),
+                        color: isDanger ? Colors.red : const Color(0xFF2E251F),
                       ),
                     ),
                     if (value != null && value.isNotEmpty) ...[
@@ -323,8 +318,7 @@ class _SettingsSectionState extends State<SettingsSection> {
                 const Icon(Icons.arrow_forward_ios,
                     size: 16, color: Color(0xFF8D6E63)),
               if (trailingIcon != null)
-                Icon(trailingIcon,
-                    size: 18, color: const Color(0xFF8D6E63)),
+                Icon(trailingIcon, size: 18, color: const Color(0xFF8D6E63)),
             ],
           ),
         ),
@@ -344,23 +338,19 @@ class _SettingsSectionState extends State<SettingsSection> {
       ),
       child: Column(
         children: _countries.map((country) {
-          final isSelected =
-              widget.countryController.text == country;
+          final isSelected = widget.countryController.text == country;
           return ListTile(
             title: Text(
               country,
               style: TextStyle(
-                fontWeight: isSelected
-                    ? FontWeight.w700
-                    : FontWeight.normal,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.normal,
                 color: isSelected
                     ? const Color(0xFF8D6E63)
                     : const Color(0xFF2E251F),
               ),
             ),
             trailing: isSelected
-                ? const Icon(Icons.check_rounded,
-                    color: Color(0xFF8D6E63))
+                ? const Icon(Icons.check_rounded, color: Color(0xFF8D6E63))
                 : null,
             onTap: () async {
               setState(() {
