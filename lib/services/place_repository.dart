@@ -86,7 +86,19 @@ class PlaceRepository {
 
     _enrichingImages.add(id);
     try {
-      final existing = _cache.get(id) ?? landmark;
+      // Before calling external image APIs, read the latest Firestore copy.
+      // This prevents re-fetching images after app restart when the current
+      // screen was opened with an older/stale Landmark object.
+      final latestFromDb = await _firebase.getLandmarkById(id);
+      if (latestFromDb != null) {
+        _cache.merge(latestFromDb);
+        if (!_cache.needsImageRefresh(id)) {
+          print('[PlaceRepository] images already cached for ${latestFromDb.name}; skip API fetch.');
+          return;
+        }
+      }
+
+      final existing = _cache.get(id) ?? latestFromDb ?? landmark;
       final fetched = await _images.fetchImages(
         existing.name,
         cityName: existing.city,
@@ -202,7 +214,7 @@ class PlaceRepository {
           'cafe',
           'tourist',
           'outing',
-        ], cityName: '',
+        ], cityName: existing.city,
       );
 
       List<NearbyPlace> resolved = result.places;
