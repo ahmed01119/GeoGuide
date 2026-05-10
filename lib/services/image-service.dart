@@ -1,15 +1,19 @@
 // ============================================================
-//  services/image-service.dart
-//  FINAL STABLE IMAGE PIPELINE
-//
-//  Fixes:
-//  - Stops Wikimedia direct image usage completely to eliminate 429 / PDF / decode crashes.
-//  - Keeps the same public API: fetchImages(), getImagesForPlace(), cacheImage().
-//  - Keeps multi-source support: Unsplash API + Pexels API + place-specific fallback images.
-//  - Adds session memory cache, failed-url cache, safe URL filtering, ranking, dedupe.
-//  - Always returns up to requested count using place-specific generated image URLs when APIs fail.
+// services/image-service.dart
+// Version 12 - parallel exact-source search + confidence ranking
+// Sources used in parallel:
+//   1) Wikipedia page thumbnails
+//   2) Pexels
+//   3) Unsplash
+// Policy:
+//   - Search exact place name first, with city/category context.
+//   - Rank all returned images by confidence.
+//   - Only if exact search returns too few images, top-up with
+//     category-safe fallback queries.
+//   - Never return more than 6 images.
 // ============================================================
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,29 +21,38 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:http/http.dart' as http;
 
-class ImageService {
- static const String _pexelsApiKey = 'ZIquWI0rbO9moUylrWLfGPWjLslcTBX0Xgh1ehFUxj7NOaunRKZN6NJD';
+class _CandidateImage {
+  final String url;
+  final int score;
+  final String source;
+  final bool isFallback;
 
-static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfuFg';
+  const _CandidateImage({
+    required this.url,
+    required this.score,
+    required this.source,
+    this.isFallback = false,
+  });
+}
+
+class ImageService {
+  static const int imagePipelineVersion = 20;
+
+  static const String _pexelsApiKey = 'ZIquWI0rbO9moUylrWLfGPWjLslcTBX0Xgh1ehFUxj7NOaunRKZN6NJD';
+  static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfuFg';
 
   static final DefaultCacheManager _cacheManager = DefaultCacheManager();
-
-  // Session cache: prevents repeated calls for the same place during one app run.
   static final Map<String, List<String>> _memoryCache = {};
-
-  // URLs that already failed, so we do not keep hitting the same source.
   static final Set<String> _failedImageUrls = {};
 
-  // Global light rate limiter for external image requests.
   static DateTime _lastNetworkHit = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _minNetworkGap = Duration(milliseconds: 280);
+  static const Duration _minNetworkGap = Duration(milliseconds: 220);
 
   static const Map<String, String> _headers = {
     'User-Agent': 'GeoGuideApp/1.0 (student-project; image-fetching)',
     'Accept': 'application/json',
   };
 
-  /// Blocks unstable/old image URLs that caused the repeated 429 and decoder errors.
   bool isBadImageUrl(String url) {
     final lower = url.trim().toLowerCase();
 
@@ -60,9 +73,7 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
     if (genericFallbackIds.any(lower.contains)) return true;
 
     return lower.isEmpty ||
-    lower.contains('loremflickr.com') ||
-        lower.contains('upload.wikimedia.org') ||
-        lower.contains('commons/thumb') ||
+        lower.contains('loremflickr.com') ||
         lower.contains('source.unsplash.com') ||
         lower.contains('/wiki/file:') ||
         lower.contains('special:') ||
@@ -81,48 +92,15 @@ static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfu
     for (final url in urls) {
       final clean = url.trim();
       final key = _dedupeKey(clean);
-
-debugPrint('[Sanitize] key=$key');
-
-if (_isValidImageUrl(clean) &&
-    !isBadImageUrl(clean) &&
-    !_failedImageUrls.contains(clean) &&
-    seen.add(key)) {
-  debugPrint('[Sanitize] accepted=$clean');
-  result.add(clean);
-}
+      if (_isValidImageUrl(clean) &&
+          !isBadImageUrl(clean) &&
+          !_failedImageUrls.contains(clean) &&
+          seen.add(key)) {
+        result.add(clean);
+      }
     }
 
     return result;
-  }
-
-  /// UI-only placeholder image.
-  /// Important: returns empty string to avoid showing/saving wrong generic photos.
-  String fallbackImage({
-    int index = 0,
-    String placeName = '',
-    String cityName = '',
-  }) {
-    return '';
-  }
-
-  /// UI-only placeholders.
-  /// Important: returns [] so no generic external fallback is displayed or saved.
-  List<String> fallbackImages({
-    int count = 6,
-    int startIndex = 0,
-    String placeName = '',
-    String cityName = '',
-  }) {
-    return const [];
-  }
-
-  int _stableSeed(String text) {
-    var hash = 0;
-    for (final code in text.codeUnits) {
-      hash = (hash * 31 + code) & 0x7fffffff;
-    }
-    return hash;
   }
 
   Future<void> _throttle() async {
@@ -134,8 +112,6 @@ if (_isValidImageUrl(clean) &&
     _lastNetworkHit = DateTime.now();
   }
 
-  // UI can use this later for offline image loading.
-  // Existing code will not break because this is only an added method.
   Future<File?> cacheImage(String url) async {
     try {
       final clean = url.trim();
@@ -144,12 +120,7 @@ if (_isValidImageUrl(clean) &&
       if (_failedImageUrls.contains(clean)) return null;
 
       await _throttle();
-
-      final fileInfo = await _cacheManager.downloadFile(
-        clean,
-        key: clean,
-      );
-
+      final fileInfo = await _cacheManager.downloadFile(clean, key: clean);
       final file = fileInfo.file;
       if (await file.exists()) {
         final length = await file.length();
@@ -168,216 +139,90 @@ if (_isValidImageUrl(clean) &&
     }
   }
 
-  bool _looksRelevantToPlace(String url, String place, String city) {
-    final lower = Uri.decodeComponent(url).toLowerCase();
-    final placeTokens = place
-        .toLowerCase()
-        .split(RegExp(r'[^a-z0-9]+'))
-        .where((t) => t.length >= 4)
-        .toList();
-    final cityTokens = city
-        .toLowerCase()
-        .split(RegExp(r'[^a-z0-9]+'))
-        .where((t) => t.length >= 4)
-        .toList();
+  Future<List<String>> fetchImages(
+    String placeName, {
+    String cityName = '',
+    String category = '',
+    int count = 6,
+    List<String> excludeUrls = const [],
+  }) async {
+    final originalPlace = placeName.trim();
+    final place = _englishPlaceAlias(originalPlace);
+    final city = cityName.trim();
+    String normalizedCategory = _normalizeCategory(category);
 
-    if (placeTokens.any((token) => lower.contains(token))) return true;
-    if (cityTokens.any((token) => lower.contains(token))) return true;
-
-    const egyptSignals = [
-      'egypt',
-      'cairo',
-      'giza',
-      'luxor',
-      'aswan',
-      'alexandria',
-      'sharm',
-      'hurghada',
-      'siwa',
-      'dahab',
-    ];
-
-    return egyptSignals.any((signal) => lower.contains(signal));
-  }
-
-bool _isStronglyRelatedToPlace(
-  String meta,
-  String place,
-  String city,
-) {
-  String normalize(String value) {
-    return value
-        .toLowerCase()
-        .replaceAll('pyrmaid', 'pyramid')
-        .replaceAll('piramide', 'pyramid')
-        .replaceAll('pyramids', 'pyramid')
-        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-  }
-
-  final text = normalize(meta);
-  final p = normalize(place);
-
-  debugPrint('[Image Filter] place=$p');
-  debugPrint('[Image Filter] meta=$text');
-
-  if (p.contains('pyramid')) {
-    final ok = text.contains('pyramid') || text.contains('giza');
-    debugPrint('[Image Filter] pyramid ok=$ok');
-    return ok;
-  }
-
-  if (p.contains('tower')) {
-    final ok = text.contains('tower');
-    debugPrint('[Image Filter] tower ok=$ok');
-    return ok;
-  }
-
-  if (p.contains('citadel')) {
-    final ok = text.contains('citadel') || text.contains('qaitbay');
-    debugPrint('[Image Filter] citadel ok=$ok');
-    return ok;
-  }
-
-  final tokens = p
-      .split(' ')
-      .where((t) =>
-          t.length >= 4 &&
-          !['great', 'egypt', 'tourist', 'attraction', 'landmark'].contains(t))
-      .toList();
-
-  if (tokens.isEmpty) return true;
-
-  final matched = tokens.where((t) => text.contains(t)).length;
-
-  final ok = matched >= 1;
-  debugPrint('[Image Filter] tokens=$tokens matched=$matched ok=$ok');
-
-  return ok;
-}
-
-Future<List<String>> fetchImages(
-  String placeName, {
-  String cityName = '',
-  String category = '',
-  int count = 6,
-  List<String> excludeUrls = const [],
-}) async {
-  final place = placeName.trim();
-  final city = cityName.trim();
-  String normalizedCategory = _normalizeCategory(category);
-
-final placeLower = place.toLowerCase();
-
-final isTouristPlace = [
-  'pyramid',
-  'sphinx',
-  'temple',
-  'museum',
-  'citadel',
-  'mosque',
-  'church',
-  'palace',
-  'castle',
-  'tomb',
-  'ruins',
-  'monument',
-  'landmark',
-].any(placeLower.contains);
-
-if (isTouristPlace) {
-  normalizedCategory = 'tourist';
-}
-  final safeCount = count.clamp(1, 10);
-
-  // المطلوب: نعتمد على الاتنين APIs بشكل ثابت.
-  // Pexels يجيب أول 3 صور، و Unsplash يكمل باقي العدد بدون تكرار.
-  final pexelsTarget = safeCount >= 6 ? 3 : (safeCount / 2).ceil();
-  final unsplashTarget = safeCount - pexelsTarget;
-
-  debugPrint(
-    '[Images] keys: pexels=${_pexelsApiKey.isNotEmpty}, unsplash=${_unsplashApiKey.isNotEmpty}',
-  );
-
-  if (place.isEmpty) return [];
-
-  final cacheKey = '$place|$city|$normalizedCategory|$safeCount|split_v3'.toLowerCase();
-  if (_memoryCache.containsKey(cacheKey)) {
-    return _memoryCache[cacheKey]!;
-  }
-
-  final results = <String>[];
-  final seen = <String>{};
-
-  for (final u in excludeUrls) {
-    seen.add(_dedupeKey(u));
-  }
-
-  List<String> pickUnique(List<String> urls, int limit) {
-    if (limit <= 0) return const [];
-
-    final picked = <String>[];
-    final ranked = _rankImages(sanitizeImages(urls), place, city, normalizedCategory);
-
-    for (final url in ranked) {
-      final key = _dedupeKey(url);
-      if (seen.add(key)) {
-  debugPrint('[PickUnique] adding=$url');
-  picked.add(url);
-
-  if (picked.length >= limit) break;
-}
+    if (_looksTouristByName(place)) {
+      normalizedCategory = 'tourist';
     }
 
-    return picked;
+    final safeCount = count.clamp(1, 6);
+    debugPrint('[Images] start place=$place city=$city cat=$normalizedCategory');
+    debugPrint('[Images] keys: pexels=${_pexelsApiKey.isNotEmpty}, unsplash=${_unsplashApiKey.isNotEmpty}');
+
+    if (originalPlace.isEmpty) return [];
+
+    if (_isGenericBusinessImageTarget(place, normalizedCategory)) {
+      debugPrint('[Images] skipped generic business image target: $place');
+      _memoryCache['$originalPlace|$place|$city|$normalizedCategory|$safeCount|pipeline_v$imagePipelineVersion'.toLowerCase()] = const [];
+      return const [];
+    }
+
+    final cacheKey =
+        '$originalPlace|$place|$city|$normalizedCategory|$safeCount|pipeline_v$imagePipelineVersion'
+            .toLowerCase();
+    if (_memoryCache.containsKey(cacheKey)) {
+      return _memoryCache[cacheKey]!;
+    }
+
+    final excludedKeys = excludeUrls.map(_dedupeKey).toSet();
+    final byKey = <String, _CandidateImage>{};
+
+    void mergeCandidates(List<_CandidateImage> items) {
+      for (final item in items) {
+        final key = _dedupeKey(item.url);
+        if (excludedKeys.contains(key)) continue;
+        final existing = byKey[key];
+        if (existing == null || item.score > existing.score) {
+          byKey[key] = item;
+        }
+      }
+    }
+
+    final futures = <Future<List<_CandidateImage>>>[
+      _fetchFromWikipediaCandidates(place, city, normalizedCategory),
+      _fetchFromPexelsCandidates(place, city, normalizedCategory),
+      _fetchFromUnsplashCandidates(place, city, normalizedCategory),
+    ];
+
+    final exactResults = await Future.wait(futures, eagerError: false);
+    mergeCandidates(exactResults[0]);
+    mergeCandidates(exactResults[1]);
+    mergeCandidates(exactResults[2]);
+
+    debugPrint('[Images] Wikipedia returned=${exactResults[0].length}');
+    debugPrint('[Images] Pexels exact returned=${exactResults[1].length}');
+    debugPrint('[Images] Unsplash exact returned=${exactResults[2].length}');
+
+    // No generic fallback images: if the APIs cannot prove that the image
+    // belongs to the exact place, we return fewer images rather than wrong ones.
+
+    final ranked = byKey.values.toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    final finalImages = sanitizeImages(
+      ranked.take(safeCount).map((e) => e.url).toList(),
+    ).take(safeCount).toList();
+
+    debugPrint('[Images] FINAL returned=${finalImages.length} for $place');
+    _memoryCache[cacheKey] = finalImages;
+    return finalImages;
   }
-
-  List<String> pexels = const [];
-  List<String> unsplash = const [];
-
-  try {
-    pexels = await _fetchFromPexels(place, city, normalizedCategory);
-    debugPrint('[Images] Pexels returned=${pexels.length}');
-  } catch (e) {
-    debugPrint('[Images] Pexels error: $e');
-  }
-
-  results.addAll(pickUnique(pexels, pexelsTarget));
-
-  try {
-    unsplash = await _fetchFromUnsplash(place, city, normalizedCategory);
-    debugPrint('[Images] Unsplash returned=${unsplash.length}');
-  } catch (e) {
-    debugPrint('[Images] Unsplash error: $e');
-  }
-
-  results.addAll(pickUnique(unsplash, unsplashTarget));
-
-  // لو مصدر منهم رجّع أقل من المطلوب، نكمل من المصدر التاني بدون تكرار.
-  if (results.length < safeCount) {
-    results.addAll(pickUnique(pexels, safeCount - results.length));
-  }
-  if (results.length < safeCount) {
-    results.addAll(pickUnique(unsplash, safeCount - results.length));
-  }
-
-  final finalImages = results.take(safeCount).toList();
-
-  debugPrint(
-    '[Images] FINAL returned=${finalImages.length} for $place '
-    '(pexelsTarget=$pexelsTarget, unsplashTarget=$unsplashTarget)',
-  );
-
-  _memoryCache[cacheKey] = finalImages;
-  return finalImages;
-}
 
   Future<List<String>> getImagesForPlace({
     required String placeName,
     String? cityName,
     String category = '',
-    int count = 7,
+    int count = 6,
     List<String> excludeUrls = const [],
   }) async {
     return fetchImages(
@@ -389,30 +234,209 @@ if (isTouristPlace) {
     );
   }
 
-  Future<List<String>> _fetchFromWikimedia(String place, String city) async {
-    // FINAL FIX: Wikimedia direct image URLs are blocked in this app because
-    // they caused repeated 429 errors, PDFs being treated as images, and
-    // Android decoder crashes. Do not remove this unless you migrate images
-    // to Firebase Storage/CDN first.
-    return [];
-  }
-
-  Future<List<String>> _fetchFromUnsplash(String place, String city, String category) async {
-    if (_unsplashApiKey.trim().isEmpty) return [];
+  Future<List<_CandidateImage>> _fetchFromWikipediaCandidates(
+    String place,
+    String city,
+    String category,
+  ) async {
+    final candidates = <_CandidateImage>[];
+    final seen = <String>{};
 
     try {
-      final queries = _queriesForPlace(place, city, category);
+      final queries = _queriesForPlace(place, city, category).take(2).toList();
+      for (final query in queries) {
+        final uri = Uri.parse(
+          'https://en.wikipedia.org/w/api.php'
+          '?action=query'
+          '&generator=search'
+          '&gsrsearch=${Uri.encodeQueryComponent(query)}'
+          '&gsrnamespace=0'
+          '&gsrlimit=6'
+          '&prop=pageimages|extracts|info'
+          '&piprop=thumbnail'
+          '&pithumbsize=1600'
+          '&pilimit=6'
+          '&inprop=url'
+          '&exintro=1'
+          '&explaintext=1'
+          '&format=json'
+          '&origin=*',
+        );
 
-      final results = <String>[];
-      final seen = <String>{};
+        await _throttle();
+        final res = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 6));
+        if (res.statusCode != 200) continue;
 
-      for (final query in queries.take(3)) {
-        if (results.length >= 8) break;
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final pages = (data['query']?['pages'] as Map?) ?? const {};
+
+        for (final raw in pages.values) {
+          if (raw is! Map) continue;
+          final page = Map<String, dynamic>.from(raw);
+          final img = (page['thumbnail']?['source'] ?? '').toString().trim();
+          if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
+            continue;
+          }
+
+          final metaText = [
+            page['title'],
+            page['extract'],
+            page['fullurl'],
+          ].whereType<Object>().join(' ');
+
+          final score = _imageConfidenceScore(
+            meta: metaText,
+            place: place,
+            city: city,
+            category: category,
+            fromWikipedia: true,
+            isFallback: false,
+          );
+
+          if (score < (_minimumScoreForCategory(category, place) - 8)) continue;
+
+          final key = _dedupeKey(img);
+          if (seen.add(key)) {
+            candidates.add(_CandidateImage(
+              url: img,
+              score: score,
+              source: 'wikipedia',
+            ));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[Wikipedia image ERROR] $e');
+    }
+
+    candidates.sort((a, b) => b.score.compareTo(a.score));
+    return candidates.take(6).toList();
+  }
+
+  Future<List<_CandidateImage>> _fetchFromCommonsCandidates(
+    String place,
+    String city,
+    String category,
+  ) async {
+    final candidates = <_CandidateImage>[];
+    final seen = <String>{};
+
+    try {
+      final queries = _queriesForPlace(place, city, category).take(5).toList();
+
+      for (final query in queries) {
+        if (candidates.length >= 10) break;
+
+        final uri = Uri.parse(
+          'https://commons.wikimedia.org/w/api.php'
+          '?action=query'
+          '&generator=search'
+          '&gsrnamespace=6'
+          '&gsrsearch=${Uri.encodeQueryComponent(query)}'
+          '&gsrlimit=8'
+          '&prop=imageinfo'
+          '&iiprop=url|mime|extmetadata'
+          '&format=json'
+          '&origin=*',
+        );
+
+        await _throttle();
+        final res = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 7));
+        if (res.statusCode != 200) continue;
+
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final pages = (data['query']?['pages'] as Map?) ?? const {};
+
+        for (final raw in pages.values) {
+          if (raw is! Map) continue;
+          final page = Map<String, dynamic>.from(raw);
+          final imageInfoList = (page['imageinfo'] as List?) ?? const [];
+          if (imageInfoList.isEmpty || imageInfoList.first is! Map) continue;
+
+          final info = Map<String, dynamic>.from(imageInfoList.first as Map);
+          final mime = (info['mime'] ?? '').toString().toLowerCase();
+          if (!mime.startsWith('image/') || mime.contains('svg') || mime.contains('tiff')) {
+            continue;
+          }
+
+          final img = (info['url'] ?? '').toString().trim();
+          if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
+            continue;
+          }
+
+          final ext = info['extmetadata'] is Map
+              ? Map<String, dynamic>.from(info['extmetadata'] as Map)
+              : const <String, dynamic>{};
+
+          String extValue(String key) {
+            final value = ext[key];
+            if (value is Map) return (value['value'] ?? '').toString();
+            return '';
+          }
+
+          final metaText = [
+            page['title'],
+            extValue('ObjectName'),
+            extValue('ImageDescription'),
+            extValue('Categories'),
+            extValue('Credit'),
+          ].whereType<Object>().join(' ');
+
+          final score = _imageConfidenceScore(
+            meta: metaText,
+            place: place,
+            city: city,
+            category: category,
+            fromWikipedia: true,
+            isFallback: false,
+          );
+
+          // Commons filenames/descriptions are often cleaner than stock APIs,
+          // but still require identity evidence. Keep the threshold close to Wikipedia.
+          if (score < (_minimumScoreForCategory(category, place) - 10)) continue;
+
+          final key = _dedupeKey(img);
+          if (seen.add(key)) {
+            candidates.add(_CandidateImage(
+              url: img,
+              score: score,
+              source: 'wikimedia_commons',
+            ));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[Wikimedia Commons image ERROR] $e');
+    }
+
+    candidates.sort((a, b) => b.score.compareTo(a.score));
+    return candidates.take(6).toList();
+  }
+
+  Future<List<_CandidateImage>> _fetchFromUnsplashCandidates(
+    String place,
+    String city,
+    String category, {
+    bool useFallbackQueries = false,
+  }) async {
+    if (_unsplashApiKey.trim().isEmpty) return const [];
+    final candidates = <_CandidateImage>[];
+    final seen = <String>{};
+
+    try {
+      final queries = useFallbackQueries
+          ? _fallbackQueriesForCategory(place, city, category)
+          : _queriesForPlace(place, city, category);
+
+      for (final query in queries.take(useFallbackQueries ? 2 : 4)) {
+        if (candidates.length >= 14) break;
 
         final url = Uri.parse(
           'https://api.unsplash.com/search/photos'
           '?query=${Uri.encodeQueryComponent(query)}'
-          '&per_page=8&orientation=landscape',
+          '&per_page=10'
+          '&orientation=landscape'
+          '&page=${_apiPageFor(place, query, category)}',
         );
 
         await _throttle();
@@ -423,80 +447,87 @@ if (isTouristPlace) {
             'Authorization': 'Client-ID $_unsplashApiKey',
           },
         ).timeout(const Duration(seconds: 6));
-debugPrint('[Unsplash] status=${res.statusCode}');
-debugPrint('[Unsplash] body=${res.body.substring(0, res.body.length > 300 ? 300 : res.body.length)}');
-        if (res.statusCode == 429) {
-          debugPrint('[Unsplash] 429 rate limited');
-          break;
-        }
-        if (res.statusCode != 200) {
-          final preview = res.body.length > 120 ? res.body.substring(0, 120) : res.body;
-          debugPrint('[Unsplash] status=${res.statusCode} body=$preview');
-          continue;
-        }
 
-        final data = jsonDecode(res.body);
+        debugPrint('[Unsplash] status=${res.statusCode} query=$query');
+        if (res.statusCode == 429) break;
+        if (res.statusCode != 200) continue;
+
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
         final items = (data['results'] as List?) ?? const [];
 
         for (final e in items) {
-          final img = (e['urls']?['regular'] ?? e['urls']?['full'] ?? '')
+          final map = e is Map ? Map<String, dynamic>.from(e) : const <String, dynamic>{};
+          final img = (map['urls']?['regular'] ?? map['urls']?['full'] ?? '')
               .toString()
               .trim();
+
+          if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
+            continue;
+          }
+
           final metaText = [
-  e['slug'],
-  e['description'],
-  e['alt_description'],
-  e['user']?['name'],
-  img,
-  place,
-  city,
-].whereType<Object>().join(' ');
-          final related = _isStronglyRelatedToPlace(metaText, place, city);
+            map['slug'],
+            map['description'],
+            map['alt_description'],
+            map['user']?['name'],
+          ].whereType<Object>().join(' ');
 
-debugPrint('[Unsplash Check] img=$img');
-debugPrint('[Unsplash Check] meta=$metaText');
-debugPrint('[Unsplash Check] related=$related');
+          final score = _imageConfidenceScore(
+            meta: metaText,
+            place: place,
+            city: city,
+            category: category,
+            fromWikipedia: false,
+            isFallback: useFallbackQueries,
+          );
 
-if (!_isValidImageUrl(img) ||
-    !_looksUseful(img) ||
-    !_looksAllowedForCategory(metaText, category) ||
-    !related) {
-  continue;
-}
-          if (seen.add(_dedupeKey(img))) {
-            results.add(img);
-            if (results.length >= 8) break;
+          final threshold = _minimumScoreForCategory(category, place);
+          if (score < threshold) continue;
+
+          final key = _dedupeKey(img);
+          if (seen.add(key)) {
+            candidates.add(_CandidateImage(
+              url: img,
+              score: score,
+              source: 'unsplash',
+              isFallback: useFallbackQueries,
+            ));
           }
         }
-
-        await Future.delayed(const Duration(milliseconds: 200));
       }
-
-      return results;
     } catch (e) {
       debugPrint('[Unsplash ERROR] $e');
-      return [];
     }
+
+    candidates.sort((a, b) => b.score.compareTo(a.score));
+    return candidates;
   }
 
-  Future<List<String>> _fetchFromPexels(String place, String city, String category) async {
-    if (_pexelsApiKey.trim().isEmpty) return [];
+  Future<List<_CandidateImage>> _fetchFromPexelsCandidates(
+    String place,
+    String city,
+    String category, {
+    bool useFallbackQueries = false,
+  }) async {
+    if (_pexelsApiKey.trim().isEmpty) return const [];
+    final candidates = <_CandidateImage>[];
+    final seen = <String>{};
 
     try {
-      final queries = _queriesForPlace(place, city, category);
+      final queries = useFallbackQueries
+          ? _fallbackQueriesForCategory(place, city, category)
+          : _queriesForPlace(place, city, category);
 
-      final results = <String>[];
-      final seen = <String>{};
-
-      for (final q in queries.take(3)) {
-        if (results.length >= 8) break;
+      for (final q in queries.take(useFallbackQueries ? 2 : 4)) {
+        if (candidates.length >= 14) break;
 
         final url = Uri.parse(
           'https://api.pexels.com/v1/search'
           '?query=${Uri.encodeQueryComponent(q)}'
-          '&per_page=8&orientation=landscape',
+          '&per_page=10'
+          '&orientation=landscape'
+          '&page=${_apiPageFor(place, q, category)}',
         );
-        
 
         await _throttle();
         final res = await http.get(
@@ -506,285 +537,663 @@ if (!_isValidImageUrl(img) ||
             'Authorization': _pexelsApiKey,
           },
         ).timeout(const Duration(seconds: 6));
-debugPrint('[Pexels] status=${res.statusCode}');
-debugPrint('[Pexels] body=${res.body.substring(0, res.body.length > 300 ? 300 : res.body.length)}');
-        if (res.statusCode == 429) {
-          debugPrint('[Pexels] 429 rate limited');
-          break;
-        }
-        if (res.statusCode != 200) {
-          final preview = res.body.length > 120 ? res.body.substring(0, 120) : res.body;
-          debugPrint('[Pexels] status=${res.statusCode} body=$preview');
-          continue;
-        }
 
-        final data = jsonDecode(res.body);
+        debugPrint('[Pexels] status=${res.statusCode} query=$q');
+        if (res.statusCode == 429) break;
+        if (res.statusCode != 200) continue;
+
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
         final photos = (data['photos'] as List?) ?? const [];
 
         for (final p in photos) {
-          final src = p['src'];
-          final img =
-              (src['large2x'] ?? src['large'] ?? src['original'] ?? '')
-                  .toString();
+          final map = p is Map ? Map<String, dynamic>.from(p) : const <String, dynamic>{};
+          final src = map['src'];
+          final img = (src is Map
+                  ? (src['large2x'] ?? src['large'] ?? src['original'] ?? '')
+                  : '')
+              .toString()
+              .trim();
+
+          if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
+            continue;
+          }
+
           final metaText = [
-  p['url'],
-  p['alt'],
-  p['photographer'],
-  img,
-].whereType<Object>().join(' ');
+            map['url'],
+            map['alt'],
+            map['photographer'],
+          ].whereType<Object>().join(' ');
 
-          final related = _isStronglyRelatedToPlace(metaText, place, city);
+          final score = _imageConfidenceScore(
+            meta: metaText,
+            place: place,
+            city: city,
+            category: category,
+            fromWikipedia: false,
+            isFallback: useFallbackQueries,
+          );
 
-debugPrint('[Pexels Check] img=$img');
-debugPrint('[Pexels Check] meta=$metaText');
-debugPrint('[Pexels Check] related=$related');
+          final threshold = _minimumScoreForCategory(category, place);
+          if (score < threshold) continue;
 
-if (!_isValidImageUrl(img) ||
-    !_looksUseful(img) ||
-    !_looksAllowedForCategory(metaText, category) ||
-    !related) {
-  continue;
-}
-
-          if (seen.add(_dedupeKey(img))) {
-            results.add(img);
-            if (results.length >= 8) break;
+          final key = _dedupeKey(img);
+          if (seen.add(key)) {
+            candidates.add(_CandidateImage(
+              url: img,
+              score: score,
+              source: 'pexels',
+              isFallback: useFallbackQueries,
+            ));
           }
         }
-
-        await Future.delayed(const Duration(milliseconds: 200));
       }
-
-      return results;
     } catch (e) {
       debugPrint('[Pexels ERROR] $e');
-      return [];
     }
+
+    candidates.sort((a, b) => b.score.compareTo(a.score));
+    return candidates;
   }
 
-  List<String> _dedupeImages(List<String> urls) {
-    final seen = <String>{};
-    final result = <String>[];
-    for (final url in urls) {
-      final clean = url.trim();
-      final key = _dedupeKey(clean);
-      if (clean.isNotEmpty && seen.add(key)) result.add(clean);
-    }
-    return result;
-  }
+  // =================== Ranking helpers ===================
 
- String _dedupeKey(String url) {
-  final uri = Uri.tryParse(url);
 
-  if (uri == null) return url;
-
-  // unique by full path only
-  return '${uri.host}${uri.path}';
-}
-
-  List<String> _rankImages(List<String> urls, String place, String city, String category) {
-    final lowerPlaceTokens = place
-        .toLowerCase()
-        .split(RegExp(r'[^a-z0-9]+'))
-        .where((t) => t.length >= 4)
-        .toList();
-    final lowerCity = city.toLowerCase();
+  bool _isGenericBusinessImageTarget(String place, String category) {
     final cat = _normalizeCategory(category);
+    if (cat != 'cafe' && cat != 'restaurant' && cat != 'hotel') return false;
 
-    int score(String url) {
-      final lower = url.toLowerCase();
-      var s = 0;
+    final normalized = _normalizeText(place);
+    if (normalized.isEmpty) return true;
 
-      if (lower.contains('images.unsplash.com')) s += 3;
-      if (lower.contains('images.pexels.com')) s += 3;
+    const genericNames = {
+      'caf', 'cafe', 'cafeteria', 'coffee', 'coffee shop',
+      'restaurant', 'hotel', 'rest house', 'unknown', 'unnamed',
+    };
+    if (genericNames.contains(normalized)) return true;
 
-      if (cat == 'restaurant' && lower.contains('restaurant')) s += 4;
-      if (cat == 'cafe' && (lower.contains('cafe') || lower.contains('coffee'))) s += 4;
-      if (cat == 'hotel' && (lower.contains('hotel') || lower.contains('resort'))) s += 4;
-      if (cat == 'tourist' &&
-          (lower.contains('landmark') || lower.contains('monument'))) {
-        s += 4;
-      }
+    if (normalized.length < 4) return true;
 
-      for (final token in lowerPlaceTokens) {
-        if (lower.contains(token)) s += 3;
-      }
-      if (lowerCity.isNotEmpty && lower.contains(lowerCity)) s += 2;
-      if (lower.contains('egypt') ||
-          lower.contains('giza') ||
-          lower.contains('cairo')) {
-        s += 2;
-      }
+    final roadLike = RegExp(
+      r'\b(street|road|avenue|square|district|quarter|neighbourhood|neighborhood|area|route|bridge)\b',
+    ).hasMatch(normalized) ||
+        RegExp(r'(شارع|طريق|ميدان|منطقة|حي|كوبري|محور)').hasMatch(place);
+    if (roadLike) return true;
 
-      if (lower.contains('large') ||
-          lower.contains('full') ||
-          lower.contains('original') ||
-          lower.contains('w=1200')) {
-        s += 2;
-      }
+    return false;
+  }
 
-      if (lower.contains('thumb') ||
-          lower.contains('thumbnail') ||
-          lower.contains('small') ||
-          lower.contains('lowres') ||
-          lower.contains('icon') ||
-          lower.contains('logo')) {
-        s -= 5;
-      }
+  bool _looksTouristByName(String placeLower) {
+    final p = placeLower.toLowerCase();
+    return [
+      'pyramid',
+      'sphinx',
+      'temple',
+      'museum',
+      'citadel',
+      'mosque',
+      'church',
+      'palace',
+      'castle',
+      'tomb',
+      'ruins',
+      'monument',
+      'landmark',
+      'library',
+      'tower',
+    ].any(p.contains);
+  }
 
-      return s;
+  bool _hasLatinLetters(String text) => RegExp(r'[a-zA-Z]').hasMatch(text);
+  bool _hasArabicLetters(String value) => RegExp(r'[\u0600-\u06FF]').hasMatch(value);
+
+  String _latinOnlyName(String value) {
+    final tokens = value
+        .split(RegExp(r'\s+'))
+        .where((token) => RegExp(r'[a-zA-Z]').hasMatch(token))
+        .map((token) => token.replaceAll(RegExp(r"[^a-zA-Z0-9&\-']+"), ''))
+        .where((token) => token.trim().isNotEmpty)
+        .join(' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return tokens;
+  }
+
+  String _englishPlaceAlias(String place) {
+    final p = place.trim().toLowerCase();
+    const aliases = {
+      'قهوة ريش': 'Cafe Riche',
+      'كافيه ريش': 'Cafe Riche',
+      'مقهى ريش': 'Cafe Riche',
+      'cafe riche': 'Cafe Riche',
+      'citadel of cairo': 'Cairo Citadel',
+      'cairo citadel': 'Cairo Citadel',
+      'saladin citadel': 'Cairo Citadel',
+      'قلعة صلاح الدين': 'Cairo Citadel',
+      'قلعه صلاح الدين': 'Cairo Citadel',
+      'ريش': 'Cafe Riche',
+      'الفيشاوي': 'El Fishawy Cafe',
+      'قهوة الفيشاوي': 'El Fishawy Cafe',
+      'كافيه الفيشاوي': 'El Fishawy Cafe',
+      'fishawy': 'El Fishawy Cafe',
+      'el fishawy': 'El Fishawy Cafe',
+      'نجيب محفوظ كافيه': 'Naguib Mahfouz Cafe',
+      'كافيه نجيب محفوظ': 'Naguib Mahfouz Cafe',
+      'naguib mahfouz cafe': 'Naguib Mahfouz Cafe',
+      'جروبي': 'Groppi Cafe',
+      'groppi': 'Groppi Cafe',
+      'groppi cafe': 'Groppi Cafe',
+      'groppi cairo': 'Groppi Cafe',
+      'مطعم صبحي كابر': 'Sobhy Kaber Restaurant',
+      'صبحي كابر': 'Sobhy Kaber Restaurant',
+      'sobhy kaber': 'Sobhy Kaber Restaurant',
+      'كشري التحرير': 'Koshary El Tahrir',
+      'koshary el tahrir': 'Koshary El Tahrir',
+      'مكتبة الإسكندرية': 'Bibliotheca Alexandrina',
+      'مكتبه الاسكندريه': 'Bibliotheca Alexandrina',
+      'قصر عابدين': 'Abdeen Palace',
+      'قصر المنتزه': 'Montaza Palace',
+      'أبو الهول': 'Great Sphinx of Giza',
+      'ابو الهول': 'Great Sphinx of Giza',
+      'أهرامات الجيزة': 'Pyramids of Giza',
+      'اهرامات الجيزه': 'Pyramids of Giza',
+      'وادي الملوك': 'Valley of the Kings',
+      'معبد فيلة': 'Philae Temple',
+      'معبد فيله': 'Philae Temple',
+      'معبد الأقصر': 'Luxor Temple',
+      'معبد الاقصر': 'Luxor Temple',
+      'معبد الكرنك': 'Karnak Temple',
+      'قلعة قايتباي': 'Citadel of Qaitbay',
+    };
+    final alias = aliases[p];
+    if (alias != null) return alias;
+
+    final latinOnly = _latinOnlyName(place);
+    if (latinOnly.isNotEmpty && _hasArabicLetters(place)) {
+      return latinOnly;
     }
 
-    final sorted = [...urls]..sort((a, b) => score(b).compareTo(score(a)));
-    return sorted;
+    return place.trim();
   }
 
-  bool _isHighQuality(String url) {
-    final lower = url.toLowerCase();
-    const bad = [
-      'thumb',
-      'thumbnail',
-      'small',
-      'lowres',
-      'tiny',
-      'icon',
-      'logo',
-      'map',
-      '.pdf',
-    ];
-    return !bad.any(lower.contains);
+  String _normalizeText(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('pyrmaid', 'pyramid')
+        .replaceAll('piramide', 'pyramid')
+        .replaceAll('pyramids', 'pyramid')
+        .replaceAll('café', 'cafe')
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
-  String _normalizeCategory(String category) {
-    final c = category.trim().toLowerCase();
-    if (c.contains('restaurant') || c.contains('dining') || c.contains('food')) {
-      return 'restaurant';
+  List<String> _strongPlaceTokens(String place) {
+    final p = _normalizeText(place);
+
+    // General rule only: extract meaningful words from ANY place name.
+    // Do not hardcode places. A token becomes strong if it is not just a country,
+    // city, connector, or broad category word. If nothing remains, keep the
+    // strongest subtype word so places like "Cairo Tower" still require "tower".
+    const weakTokens = {
+      'egypt', 'giza', 'cairo', 'alexandria', 'luxor', 'aswan', 'hurghada',
+      'sharm', 'dahab', 'siwa', 'of', 'the', 'and', 'in', 'at', 'near',
+      'great', 'new', 'old', 'egyptian', 'tourist', 'attraction', 'landmark',
+      'restaurant', 'restaurants', 'cafe', 'coffee', 'hotel', 'resort',
+      'district', 'street', 'road', 'square', 'city', 'governorate',
+    };
+
+    final tokens = p
+        .split(' ')
+        .where((t) => t.length >= 4 && !weakTokens.contains(t))
+        .toList();
+
+    if (tokens.isNotEmpty) return tokens.toSet().toList();
+
+    const subtypeTokens = {
+      'tower', 'citadel', 'palace', 'temple', 'museum', 'sphinx', 'pyramid',
+      'mosque', 'church', 'library', 'fort', 'castle', 'park', 'garden',
+      'beach', 'mall', 'zoo', 'aquarium',
+    };
+
+    final fallback = p
+        .split(' ')
+        .where((t) => subtypeTokens.contains(t))
+        .toList();
+
+    return fallback.toSet().toList();
+  }
+
+  List<String> _identityTokens(String place) {
+    final subtypeWords = <String>{
+      'tower', 'citadel', 'palace', 'temple', 'museum', 'sphinx', 'pyramid',
+      'mosque', 'church', 'library', 'fort', 'castle', 'park', 'garden',
+      'beach', 'mall', 'restaurant', 'cafe', 'coffee', 'hotel', 'resort',
+    };
+
+    return _strongPlaceTokens(place)
+        .where((t) => !subtypeWords.contains(t))
+        .toList();
+  }
+
+  bool _isGenericNamedPlace(String place) {
+    final normalized = _normalizeText(place);
+    if (normalized.isEmpty) return false;
+
+    final words = normalized.split(' ').where((w) => w.length >= 3).toList();
+    if (words.length < 2) return false;
+
+    // Generic named places are names where the meaningful part is mainly
+    // a city + a broad subtype, e.g. Cairo Tower / Luxor Temple. For these
+    // names, matching only "tower" or "temple" is not enough; the real
+    // metadata must contain the full phrase or very strong identity evidence.
+    return _identityTokens(place).isEmpty && _strongPlaceTokens(place).isNotEmpty;
+  }
+
+  String _expectedSubtype(String place, String category) {
+    final p = _normalizeText(place);
+    final cat = _normalizeCategory(category);
+    if (cat == 'cafe') return 'cafe';
+    if (cat == 'restaurant') return 'restaurant';
+    if (cat == 'hotel') return 'hotel';
+    if (cat == 'outing') return 'outing';
+    if (p.contains('temple')) return 'temple';
+    if (p.contains('palace')) return 'palace';
+    if (p.contains('citadel')) return 'citadel';
+    if (p.contains('museum')) return 'museum';
+    if (p.contains('library') || p.contains('bibliotheca')) return 'library';
+    if (p.contains('tower')) return 'tower';
+    if (p.contains('sphinx')) return 'sphinx';
+    if (p.contains('pyramid')) return 'pyramid';
+    if (p.contains('mosque')) return 'mosque';
+    if (p.contains('church')) return 'church';
+    return cat;
+  }
+
+  List<String> _subtypeKeywords(String subtype) {
+    switch (subtype) {
+      case 'temple': return ['temple'];
+      case 'palace': return ['palace'];
+      case 'citadel': return ['citadel', 'fortress', 'saladin'];
+      case 'museum': return ['museum'];
+      case 'library': return ['library', 'bibliotheca'];
+      case 'tower': return ['tower'];
+      case 'sphinx': return ['sphinx'];
+      case 'pyramid': return ['pyramid'];
+      case 'mosque': return ['mosque'];
+      case 'church': return ['church', 'cathedral'];
+      case 'cafe': return ['cafe', 'coffee', 'coffee shop', 'coffeehouse', 'tea'];
+      case 'restaurant': return ['restaurant', 'dining', 'food', 'meal'];
+      case 'hotel': return ['hotel', 'resort', 'lobby', 'suite', 'room'];
+      case 'outing': return ['park', 'garden', 'beach', 'mall', 'entertainment'];
+      default: return const [];
     }
-    if (c.contains('cafe') || c.contains('coffee')) return 'cafe';
-    if (c.contains('hotel') || c.contains('resort') || c.contains('lodging')) {
-      return 'hotel';
+  }
+
+  List<String> _conflictingSubtypeWords(String subtype) {
+    switch (subtype) {
+      case 'temple': return ['sphinx', 'pyramid', 'citadel', 'palace'];
+      case 'palace': return ['temple', 'sphinx', 'pyramid', 'citadel'];
+      case 'citadel': return ['qaitbay', 'temple', 'sphinx', 'pyramid', 'palace'];
+      case 'museum': return ['temple', 'sphinx', 'pyramid', 'citadel'];
+      case 'library': return ['temple', 'sphinx', 'pyramid', 'citadel', 'palace'];
+      case 'tower': return ['temple', 'sphinx', 'pyramid'];
+      case 'cafe': return ['pyramid', 'sphinx', 'temple', 'museum', 'citadel'];
+      case 'restaurant': return ['pyramid', 'sphinx', 'temple', 'museum', 'citadel'];
+      case 'hotel': return ['pyramid', 'sphinx', 'temple', 'museum', 'citadel'];
+      default: return const [];
     }
-    if (c.contains('outing') || c.contains('park') || c.contains('entertainment')) {
-      return 'outing';
+  }
+
+  int _minimumScoreForCategory(String category, String place) {
+    final cat = _normalizeCategory(category);
+    final hasIdentity = _identityTokens(place).isNotEmpty;
+    final genericName = _isGenericNamedPlace(place);
+
+    if (genericName) return 72;
+    if (cat == 'tourist') return hasIdentity ? 64 : 58;
+    if (cat == 'hotel') return hasIdentity ? 62 : 56;
+    if (cat == 'restaurant') return hasIdentity ? 62 : 56;
+    if (cat == 'cafe') return hasIdentity ? 62 : 56;
+    if (cat == 'outing') return hasIdentity ? 58 : 52;
+    return 60;
+  }
+
+  bool _hasCategoryVisualSignal(String meta, String category) {
+    final cat = _normalizeCategory(category);
+    final lower = meta.toLowerCase();
+    if (cat == 'cafe') {
+      return ['cafe', 'coffee', 'espresso', 'latte', 'bakery', 'tea', 'coffee shop', 'coffeehouse', 'cup', 'table', 'shisha', 'hookah']
+          .any(lower.contains);
     }
-    return 'tourist';
+    if (cat == 'restaurant') {
+      return ['restaurant', 'dining', 'food', 'meal', 'cuisine', 'dish', 'kitchen', 'menu', 'table']
+          .any(lower.contains);
+    }
+    if (cat == 'hotel') {
+      return ['hotel', 'resort', 'room', 'lobby', 'suite', 'pool', 'reception']
+          .any(lower.contains);
+    }
+    if (cat == 'outing') {
+      return ['park', 'garden', 'beach', 'seaside', 'entertainment', 'mall', 'cinema']
+          .any(lower.contains);
+    }
+    return true;
   }
-
- List<String> _queriesForPlace(String place, String city, String category) {
-  final cleanPlace = place.trim();
-  final cleanCity = city.trim();
-  final cat = _normalizeCategory(category);
-  final queries = <String>[];
-
-  void add(String q) {
-    final clean = q.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (clean.isNotEmpty) queries.add(clean);
-  }
-
-  if (cat == 'restaurant') {
-    add('$cleanPlace restaurant $cleanCity Egypt');
-    add('$cleanPlace $cleanCity');
-  } else if (cat == 'cafe') {
-    add('$cleanPlace cafe $cleanCity Egypt');
-    add('$cleanPlace $cleanCity');
-  } else if (cat == 'hotel') {
-    add('$cleanPlace hotel $cleanCity Egypt');
-    add('$cleanPlace $cleanCity');
-  } else {
-    add('$cleanPlace $cleanCity Egypt');
-    add('$cleanPlace Egypt');
-  }
-
-  return queries.toSet().take(2).toList();
-}
 
   bool _looksAllowedForCategory(String metaText, String category) {
     final cat = _normalizeCategory(category);
     final lower = metaText.toLowerCase();
 
-    if (cat == 'tourist' || cat == 'outing') return true;
-
-    const touristLandmarkWords = [
-      'pyramid',
-      'pyramids',
-      'sphinx',
-      'temple',
-      'tomb',
-      'mosque',
-      'church',
-      'museum',
-      'citadel',
-      'castle',
-      'fort',
-      'ruins',
-      'monument',
-      'landmark',
-      'camel',
-      'desert',
-      'pharaoh',
-      'pharaonic',
-      'giza plateau',
-    ];
-
-    if (touristLandmarkWords.any(lower.contains)) return false;
+    if (cat == 'tourist') {
+      return ['museum', 'palace', 'temple', 'citadel', 'fort', 'castle', 'pyramid', 'sphinx', 'mosque', 'church', 'ruins', 'monument', 'landmark', 'heritage', 'library', 'tower', 'historic', 'archaeological']
+              .any(lower.contains) ||
+          lower.contains('egypt');
+    }
 
     if (cat == 'restaurant') {
-      const positive = ['restaurant', 'dining', 'food', 'meal', 'cuisine'];
-      return lower.trim().isEmpty || positive.any(lower.contains);
+      return ['restaurant', 'dining', 'food', 'meal', 'cuisine', 'dish', 'menu', 'table', 'served']
+          .any(lower.contains);
     }
-
     if (cat == 'cafe') {
-      const positive = ['cafe', 'coffee', 'espresso', 'bakery', 'tea'];
-      return lower.trim().isEmpty || positive.any(lower.contains);
+      return ['cafe', 'coffee', 'espresso', 'bakery', 'tea', 'coffee shop', 'coffeehouse', 'cup', 'table', 'shisha', 'hookah']
+          .any(lower.contains);
     }
-
     if (cat == 'hotel') {
-      const positive = ['hotel', 'resort', 'room', 'lobby', 'suite', 'pool'];
-      return lower.trim().isEmpty || positive.any(lower.contains);
+      return ['hotel', 'resort', 'room', 'lobby', 'suite', 'pool', 'reception']
+          .any(lower.contains);
+    }
+    return true;
+  }
+
+  int _imageConfidenceScore({
+    required String meta,
+    required String place,
+    required String city,
+    required String category,
+    required bool fromWikipedia,
+    required bool isFallback,
+  }) {
+    final text = _normalizeText(meta);
+    final p = _normalizeText(place);
+    final c = _normalizeText(city);
+    final cat = _normalizeCategory(category);
+    final strongTokens = _strongPlaceTokens(place);
+    final expectedSubtype = _expectedSubtype(place, category);
+    final genericNamedPlace = _isGenericNamedPlace(place);
+
+    int score = 0;
+
+    if (fromWikipedia) score += 110;
+    if (isFallback) score -= 22;
+    final hasFullPhrase = p.isNotEmpty && text.contains(p);
+    if (hasFullPhrase) score += 95;
+
+    if (genericNamedPlace && !hasFullPhrase) {
+      // A generic name like "Cairo Tower" or "Luxor Temple" must match
+      // the full phrase. City + subtype alone is exactly what caused wrong
+      // mosque/citadel/temple photos to pass before.
+      score -= fromWikipedia ? 45 : 95;
     }
 
-    return true;
+    final matchedStrong = strongTokens.where((t) => text.contains(t)).length;
+    score += matchedStrong * 24;
+
+    final identityTokens = _identityTokens(place);
+    final matchedIdentity = identityTokens.where((t) => text.contains(t)).length;
+
+    // General rule: for a named place, city/category/subtype alone is not enough.
+    // If a name has an identity token, at least one identity token should appear
+    // in the real metadata. This catches wrong city-level photos for all places,
+    // not just a hardcoded list.
+    if (identityTokens.isNotEmpty && matchedIdentity == 0 && !hasFullPhrase) {
+      score -= isFallback ? 40 : 72;
+    } else if (matchedIdentity > 0) {
+      score += matchedIdentity * 28;
+    }
+
+    if (strongTokens.isNotEmpty && matchedStrong == 0 && !hasFullPhrase) {
+      score -= isFallback ? 32 : 58;
+    }
+
+    if (c.isNotEmpty && text.contains(c)) score += 12;
+    if (text.contains('egypt')) score += 8;
+
+    final subtypeWords = _subtypeKeywords(expectedSubtype);
+    final conflicting = _conflictingSubtypeWords(expectedSubtype);
+    if (subtypeWords.isNotEmpty && subtypeWords.any(text.contains)) {
+      score += 20;
+    } else if (_looksTouristByName(place) || cat != 'tourist') {
+      score -= 18;
+    }
+    if (conflicting.any(text.contains)) score -= 35;
+
+    // City/category alone must not be enough for a specific named place.
+    // The APIs often return photos from the same city but not the same place.
+    if (!isFallback && strongTokens.isNotEmpty && matchedStrong == 0 && !hasFullPhrase) {
+      score -= 35;
+    }
+
+    if (_hasCategoryVisualSignal(text, cat)) score += 15;
+    if (_looksAllowedForCategory(text, cat)) score += 12;
+
+    const badSignals = [
+      'traffic', 'car ', 'truck', 'van', 'soccer', 'football', 'stadium',
+      'screen', 'skyline', 'sign', 'street sign', 'map', 'logo', 'icon',
+    ];
+    for (final bad in badSignals) {
+      if (text.contains(bad)) score -= 22;
+    }
+
+    return score;
+  }
+
+  int _apiPageFor(String place, String query, String category) {
+    final seed = _stableSeed('$place|$query|$category');
+    return 1 + (seed % 3);
+  }
+
+  int _stableSeed(String text) {
+    var hash = 0;
+    for (final code in text.codeUnits) {
+      hash = (hash * 31 + code) & 0x7fffffff;
+    }
+    return hash;
+  }
+
+  String _normalizeCategory(String category) {
+    final c = category.trim().toLowerCase();
+    if (c.contains('restaurant') || c.contains('restaurants') || c.contains('resturant') || c.contains('resturants') || c.contains('restraunt') || c.contains('restraunts') || c.contains('dining') || c.contains('food')) {
+      return 'restaurant';
+    }
+    if (c.contains('cafe') || c.contains('coffee')) return 'cafe';
+    if (c.contains('hotel') || c.contains('resort') || c.contains('lodging')) return 'hotel';
+    if (c.contains('outing') || c.contains('park') || c.contains('entertainment')) return 'outing';
+    return 'tourist';
+  }
+
+  List<String> _queriesForPlace(String place, String city, String category) {
+    final cleanPlace = _englishPlaceAlias(place).trim();
+    final cleanCity = city.trim();
+    final cat = _normalizeCategory(category);
+    final catWord = cat == 'tourist' ? 'landmark' : cat;
+    final queries = <String>[];
+
+    void add(String q) {
+      final clean = q.trim().replaceAll(RegExp(r'\s+'), ' ');
+      if (clean.isNotEmpty && !queries.contains(clean)) queries.add(clean);
+    }
+
+    final aliases = _exactQueryAliases(cleanPlace);
+    for (final alias in aliases) {
+      add('$alias $cleanCity Egypt');
+      add('$alias $catWord $cleanCity Egypt');
+      add('$alias Egypt');
+      add('$alias $catWord Egypt');
+    }
+
+    if (queries.isEmpty) {
+      final subject = _englishSubjectForImageSearch(cleanPlace, cat);
+      add('$subject $cleanCity Egypt');
+      add('$subject Egypt');
+    }
+
+    return queries.take(8).toList();
+  }
+
+  List<String> _exactQueryAliases(String place) {
+    final clean = place.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final result = <String>[];
+
+    void add(String value) {
+      final v = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+      if (v.isNotEmpty && !result.contains(v)) result.add(v);
+    }
+
+    add(clean);
+
+    final normalizedClean = _normalizeText(clean);
+    if (normalizedClean.endsWith(' cafe')) {
+      final base = clean.replaceFirst(RegExp(r'\s+[Cc]afe$'), '').trim();
+      add(base);
+      add('Cafe $base');
+      add('$base Coffee');
+    }
+    if (normalizedClean.endsWith(' restaurant')) {
+      final base = clean.replaceFirst(RegExp(r'\s+[Rr]estaurant$'), '').trim();
+      add(base);
+      add('$base Egypt');
+    }
+    if (normalizedClean.endsWith(' hotel')) {
+      final base = clean.replaceFirst(RegExp(r'\s+[Hh]otel$'), '').trim();
+      add(base);
+    }
+
+    final normalized = _normalizeText(clean);
+    final words = normalized.split(' ').where((w) => w.isNotEmpty).toList();
+
+    final ofMatch = RegExp(r'^([a-z0-9 ]+) of ([a-z0-9 ]+)').firstMatch(normalized);
+    if (ofMatch != null) {
+      final left = ofMatch.group(1)!.trim();
+      final right = ofMatch.group(2)!.trim();
+      add('$right $left');
+      add('$left of $right');
+    }
+
+    const subtypes = {
+      'tower', 'citadel', 'palace', 'temple', 'museum', 'library', 'mosque',
+      'church', 'pyramid', 'sphinx', 'fort', 'castle', 'cafe', 'restaurant',
+      'hotel', 'resort', 'park', 'garden', 'beach', 'mall'
+    };
+    const cityWords = {
+      'cairo', 'giza', 'alexandria', 'luxor', 'aswan', 'hurghada', 'sharm',
+      'dahab', 'siwa'
+    };
+    for (final subtype in subtypes) {
+      if (!words.contains(subtype)) continue;
+      for (final city in cityWords) {
+        if (words.contains(city)) {
+          add('$city $subtype');
+          add('$subtype of $city');
+        }
+      }
+    }
+
+    if (words.length >= 3) {
+      for (var i = 0; i < words.length - 1; i++) {
+        final a = words[i];
+        final b = words[i + 1];
+        if (subtypes.contains(a) || subtypes.contains(b)) {
+          add('$a $b');
+        }
+      }
+    }
+
+    return result.take(5).toList();
+  }
+
+  List<String> _fallbackQueriesForCategory(String place, String city, String category) {
+    final cleanCity = city.trim();
+    final cat = _normalizeCategory(category);
+    final queries = <String>[];
+
+    void add(String q) {
+      final clean = q.trim().replaceAll(RegExp(r'\s+'), ' ');
+      if (clean.isNotEmpty && !queries.contains(clean)) queries.add(clean);
+    }
+
+    switch (cat) {
+      case 'cafe':
+        add('traditional cafe in $cleanCity Egypt');
+        add('coffee shop in $cleanCity Egypt');
+        break;
+      case 'restaurant':
+        add('restaurant dining in $cleanCity Egypt');
+        add('egyptian food restaurant in $cleanCity');
+        break;
+      case 'hotel':
+        add('hotel resort in $cleanCity Egypt');
+        add('hotel lobby room in $cleanCity Egypt');
+        break;
+      case 'outing':
+        add('park beach entertainment in $cleanCity Egypt');
+        add('outing place in $cleanCity Egypt');
+        break;
+      case 'tourist':
+      default:
+        final subtype = _expectedSubtype(place, category);
+        final subtypeWords = _subtypeKeywords(subtype).join(' ');
+        add('$subtypeWords in $cleanCity Egypt');
+        add('tourist attraction $cleanCity Egypt');
+        break;
+    }
+    return queries.take(2).toList();
+  }
+
+  String _englishSubjectForImageSearch(String place, String category) {
+    final normalized = _normalizeCategory(category);
+    final trimmed = place.trim();
+    final lower = trimmed.toLowerCase();
+    if (_hasLatinLetters(trimmed)) return trimmed;
+    if (_hasArabicLetters(trimmed)) {
+      switch (normalized) {
+        case 'cafe': return 'cafe coffee shop';
+        case 'restaurant': return 'restaurant dining';
+        case 'hotel': return 'hotel resort';
+        case 'outing': return 'outing place';
+        case 'tourist':
+        default: return 'tourist attraction';
+      }
+    }
+    if (lower.isEmpty) return 'tourist attraction';
+    return trimmed;
   }
 
   bool _looksUseful(String url) {
     final lower = url.toLowerCase();
-
-    const bad = [
-      'logo',
-      'icon',
-      'map',
-      'symbol',
-      'flag',
-      'placeholder',
-      'avatar',
-      'profile',
-    ];
-
+    const bad = ['logo', 'icon', 'map', 'symbol', 'flag', 'placeholder', 'avatar', 'profile'];
     return !bad.any(lower.contains);
+  }
+
+  String _dedupeKey(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return url;
+    return '${uri.host}${uri.path}';
   }
 
   bool _isValidImageUrl(String url) {
     final clean = url.trim();
     final lower = clean.toLowerCase();
-
     if (lower.isEmpty) return false;
     if (isBadImageUrl(lower)) return false;
     if (!(lower.startsWith('http://') || lower.startsWith('https://'))) {
       return false;
     }
-
-    if (lower.contains('.jpg') ||
-        lower.contains('.jpeg') ||
-        lower.contains('.png') ||
-        lower.contains('.webp')) {
+    if (lower.contains('.jpg') || lower.contains('.jpeg') || lower.contains('.png') || lower.contains('.webp')) {
       return true;
     }
-
-    if (lower.contains('images.unsplash.com') ||
-        lower.contains('images.pexels.com')) {
+    if (lower.contains('images.unsplash.com') || lower.contains('images.pexels.com') || lower.contains('upload.wikimedia.org')) {
       return true;
     }
-
     return false;
   }
 }

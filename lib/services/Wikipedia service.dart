@@ -27,7 +27,17 @@ class WikipediaService {
   static DateTime _lastWikiHit = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _wikiGap = Duration(milliseconds: 350);
 
-  WikipediaService({Dio? dio}) : _dio = dio ?? Dio();
+  WikipediaService({Dio? dio}) : _dio = dio ?? Dio() {
+    _dio.options = _dio.options.copyWith(
+      connectTimeout: const Duration(seconds: 8),
+      receiveTimeout: const Duration(seconds: 10),
+      sendTimeout: const Duration(seconds: 8),
+      headers: const {
+        'User-Agent': 'GeoGuideApp/1.0 (student-project; wikipedia-fetching)',
+        'Accept': 'application/json',
+      },
+    );
+  }
 
   Future<void> _throttle() async {
     final now = DateTime.now();
@@ -118,15 +128,68 @@ class WikipediaService {
     'disambiguation',
   ];
 
+
+  String _canonicalEnglishQuery(String value) {
+    final raw = value.trim();
+    final normalized = _normalize(raw);
+    if (normalized.isEmpty) return raw;
+
+    const aliases = {
+      'قهوة ريش': 'Cafe Riche',
+      'كافيه ريش': 'Cafe Riche',
+      'مقهى ريش': 'Cafe Riche',
+      'ريش': 'Cafe Riche',
+      'cafe riche': 'Cafe Riche',
+      'قهوة الفيشاوي': 'El Fishawy Cafe',
+      'كافيه الفيشاوي': 'El Fishawy Cafe',
+      'الفيشاوي': 'El Fishawy Cafe',
+      'el fishawy': 'El Fishawy Cafe',
+      'fishawy': 'El Fishawy Cafe',
+      'نجيب محفوظ كافيه': 'Naguib Mahfouz Cafe',
+      'كافيه نجيب محفوظ': 'Naguib Mahfouz Cafe',
+      'جروبي': 'Groppi Cafe',
+      'groppi': 'Groppi Cafe',
+      'خان الخليلي': 'Khan el-Khalili',
+      'خان الخليل': 'Khan el-Khalili',
+      'khan el khalili': 'Khan el-Khalili',
+      'khan el-khalili': 'Khan el-Khalili',
+      'المتحف المصري الكبير': 'Grand Egyptian Museum',
+      'المتحف المصري': 'Egyptian Museum',
+      'برج القاهرة': 'Cairo Tower',
+      'قصر عابدين': 'Abdeen Palace',
+      'قصر المنتزه': 'Montaza Palace',
+      'مكتبة الإسكندرية': 'Bibliotheca Alexandrina',
+      'وادي الملوك': 'Valley of the Kings',
+      'معبد الأقصر': 'Luxor Temple',
+      'معبد الكرنك': 'Karnak Temple',
+      'معبد حتشبسوت': 'Temple of Hatshepsut',
+      'معبد فيلة': 'Philae Temple',
+      'أبو سمبل': 'Abu Simbel Temples',
+      'أبو الهول': 'Great Sphinx of Giza',
+      'ابو الهول': 'Great Sphinx of Giza',
+      'أهرامات الجيزة': 'Pyramids of Giza',
+      'اهرامات الجيزه': 'Pyramids of Giza',
+      'واحة سيوة': 'Siwa Oasis',
+    };
+
+    for (final entry in aliases.entries) {
+      final key = _normalize(entry.key);
+      if (normalized == key || normalized.contains(key)) return entry.value;
+    }
+
+    return raw;
+  }
+
   Future<WikipediaResult?> search(
     String placeName, {
     String? cityName,
   }) async {
-    final resultKey = '${placeName.trim().toLowerCase()}|${(cityName ?? '').trim().toLowerCase()}';
+    final canonicalPlaceName = _canonicalEnglishQuery(placeName);
+    final resultKey = '${canonicalPlaceName.trim().toLowerCase()}|${(cityName ?? '').trim().toLowerCase()}';
     if (_resultCache.containsKey(resultKey)) return _resultCache[resultKey];
 
     final pageTitle = await _findBestTitle(
-      placeName,
+      canonicalPlaceName,
       cityName: cityName,
     );
 

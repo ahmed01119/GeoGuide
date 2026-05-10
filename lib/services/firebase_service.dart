@@ -531,12 +531,114 @@ class FirebaseService {
     return snap.docs.map((d) => Landmark.fromJson(d.data(), d.id)).toList();
   }
 
+  String _canonicalCityForLandmark(Landmark landmark) {
+    final rawCity = landmark.city.trim();
+    final text = _normalizeGeoText(
+      '${landmark.name} ${landmark.city} ${landmark.address} '
+      '${landmark.description} ${landmark.shortDescription} ${landmark.fullDescription}',
+    );
+
+    String? byAlias(String value) {
+      final n = _normalizeGeoText(value);
+      if (n.isEmpty) return null;
+
+      const cityAliases = {
+        'cairo': 'Cairo',
+        'القاهرة': 'Cairo',
+        'القاهره': 'Cairo',
+        'giza': 'Giza',
+        'giza governorate': 'Giza',
+        'giza plateau': 'Giza',
+        'haram': 'Giza',
+        'al haram': 'Giza',
+        'el haram': 'Giza',
+        'al ahram': 'Giza',
+        'nazlet el semman': 'Giza',
+        'nazlet al samman': 'Giza',
+        'nazlet el samman': 'Giza',
+        'الجيزة': 'Giza',
+        'الجيزه': 'Giza',
+        'جيزة': 'Giza',
+        'جيزه': 'Giza',
+        'الهرم': 'Giza',
+        'الأهرامات': 'Giza',
+        'الاهرامات': 'Giza',
+        'luxor': 'Luxor',
+        'الأقصر': 'Luxor',
+        'الاقصر': 'Luxor',
+        'aswan': 'Aswan',
+        'أسوان': 'Aswan',
+        'اسوان': 'Aswan',
+        'alexandria': 'Alexandria',
+        'alex': 'Alexandria',
+        'الإسكندرية': 'Alexandria',
+        'الاسكندرية': 'Alexandria',
+        'hurghada': 'Hurghada',
+        'الغردقة': 'Hurghada',
+        'sharm el sheikh': 'Sharm El Sheikh',
+        'sharm': 'Sharm El Sheikh',
+        'شرم الشيخ': 'Sharm El Sheikh',
+        'dahab': 'Dahab',
+        'دهب': 'Dahab',
+        'siwa': 'Siwa',
+        'سيوة': 'Siwa',
+      };
+
+      for (final entry in cityAliases.entries) {
+        final key = _normalizeGeoText(entry.key);
+        if (n == key || n.contains(key) || key.contains(n)) {
+          return entry.value;
+        }
+      }
+      return null;
+    }
+
+    final direct = byAlias(rawCity);
+    if (direct != null) return direct;
+
+    // Strong landmark/location inference. This fixes old and generated pyramid
+    // docs that arrive as Egypt, Al Haram, Nazlet El-Semman, or Arabic names.
+    const gizaSignals = [
+      'great pyramid',
+      'pyramids of giza',
+      'giza pyramids',
+      'pyramid of khufu',
+      'khufu pyramid',
+      'giza plateau',
+      'sphinx',
+      'الأهرامات',
+      'الاهرامات',
+      'اهرامات الجيزة',
+      'أهرامات الجيزة',
+      'الهرم',
+      'ابو الهول',
+      'أبو الهول',
+    ];
+    if (gizaSignals.any((e) => text.contains(_normalizeGeoText(e)))) {
+      return 'Giza';
+    }
+
+    final fromText = byAlias(text);
+    if (fromText != null) return fromText;
+
+    return rawCity;
+  }
+
+  String _normalizeGeoText(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('governorate', '')
+        .replaceAll('egypt', '')
+        .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
   // ──────────────────────────────────────────────────────────────
   //  LANDMARKS – Write
   // ──────────────────────────────────────────────────────────────
   Future<String> saveLandmark(Landmark landmark) async {
-    final effectiveCity =
-        landmark.city.trim().isNotEmpty ? landmark.city.trim() : '';
+    final effectiveCity = _canonicalCityForLandmark(landmark);
 
     if (effectiveCity.isEmpty || effectiveCity.toLowerCase() == 'egypt') {
       throw Exception('Cannot save landmark without a specific city.');
@@ -558,6 +660,8 @@ class FirebaseService {
           ? landmark.shortDescription.trim()
           : landmark.description.trim(),
       createdAt: landmark.createdAt ?? DateTime.now(),
+      imagePipelineVersion: landmark.imagePipelineVersion,
+      imagesAreFallback: landmark.imagesAreFallback,
     );
 
     final existing = await _db
@@ -605,13 +709,25 @@ class FirebaseService {
     setText('openingHours', incoming.openingHours, (existing['openingHours'] ?? '').toString());
 
     final existingMedia = List<String>.from(existing['mediaUrls'] as List? ?? const []);
-    final merged = _mergeMediaUrls(existingMedia, incoming.mediaUrls, incoming.imageUrl);
-    if (merged.length > existingMedia.length) {
+    final existingVersion = int.tryParse((existing['imagePipelineVersion'] ?? 0).toString()) ?? 0;
+    final existingFallback = (existing['imagesAreFallback'] ?? false).toString().toLowerCase() == 'true';
+    final incomingHasImages = incoming.mediaUrls.isNotEmpty || incoming.imageUrl.trim().isNotEmpty;
+    final shouldReplaceImages = incomingHasImages && (
+      existingVersion < incoming.imagePipelineVersion ||
+      existingMedia.isEmpty ||
+      ((existing['imageUrl'] ?? '').toString().trim().isEmpty) ||
+      (existingFallback && !incoming.imagesAreFallback)
+    );
+
+    final merged = shouldReplaceImages
+        ? _mergeMediaUrls(const [], incoming.mediaUrls, incoming.imageUrl)
+        : _mergeMediaUrls(existingMedia, incoming.mediaUrls, incoming.imageUrl);
+
+    if (shouldReplaceImages || merged.length > existingMedia.length) {
       map['mediaUrls'] = merged;
-      if (incoming.imageUrl.trim().isNotEmpty &&
-          (existing['imageUrl'] ?? '').toString().trim().isEmpty) {
-        map['imageUrl'] = incoming.imageUrl.trim();
-      }
+      map['imageUrl'] = merged.isNotEmpty ? merged.first : incoming.imageUrl.trim();
+      map['imagePipelineVersion'] = incoming.imagePipelineVersion;
+      map['imagesAreFallback'] = incoming.imagesAreFallback;
     }
 
     final existingRating = ((existing['rating'] ?? 0) as num).toDouble();
@@ -663,7 +779,7 @@ class FirebaseService {
     for (final u in old) add(u);
     for (final u in incoming) add(u);
 
-    return result.take(7).toList();
+    return result.take(6).toList();
   }
 
   Future<Map<String, String>> saveLandmarks(List<Landmark> landmarks) async {
@@ -729,8 +845,13 @@ class FirebaseService {
     final nameToDocId = <String, String>{};
     for (final doc in citiesSnap.docs) {
       final name = (doc.data()['name'] as String? ?? '').trim();
+      if (name.isEmpty) continue;
       nameToDocId[name.toLowerCase()] = doc.id;
     }
+
+    // Ensure Giza exists before fixing pyramid-related documents.
+    final gizaCity = await findOrCreateCityByName('Giza');
+    nameToDocId['giza'] = gizaCity.id;
 
     final validDocIds = nameToDocId.values.toSet();
     final landmarksSnap = await _db.collection('landmarks').get();
@@ -739,15 +860,52 @@ class FirebaseService {
 
     for (final doc in landmarksSnap.docs) {
       final data = doc.data();
-      final currentCityId = data['cityId'] as String? ?? '';
-      if (validDocIds.contains(currentCityId)) continue;
-
+      final currentCityId = (data['cityId'] as String? ?? '').trim();
       final cityNameInDoc = (data['city'] as String? ?? '').trim();
-      final correctDocId = nameToDocId[cityNameInDoc.toLowerCase()];
+      final name = (data['name'] as String? ?? '').trim();
+      final address = (data['address'] as String? ?? '').trim();
+      final description = (data['description'] as String? ?? '').trim();
+      final shortDescription = (data['shortDescription'] as String? ?? '').trim();
 
-      if (correctDocId != null) {
-        batch.update(doc.reference, {'cityId': correctDocId});
+      final fake = Landmark(
+        id: doc.id,
+        name: name,
+        cityId: currentCityId,
+        city: cityNameInDoc,
+        category: (data['category'] as String? ?? 'tourist').trim(),
+        description: description,
+        shortDescription: shortDescription,
+        fullDescription: (data['fullDescription'] as String? ?? '').trim(),
+        history: (data['history'] as String? ?? '').trim(),
+        imageUrl: (data['imageUrl'] as String? ?? '').trim(),
+        mediaUrls: List<String>.from(data['mediaUrls'] as List? ?? const []),
+        lat: ((data['lat'] ?? 0) as num).toDouble(),
+        lng: ((data['lng'] ?? 0) as num).toDouble(),
+        address: address,
+        rating: ((data['rating'] ?? 0) as num).toDouble(),
+        openingHours: (data['openingHours'] as String? ?? '').trim(),
+        location: (data['location'] as String? ?? '').trim(),
+      );
+
+      final canonicalCity = _canonicalCityForLandmark(fake);
+      final correctDocId = nameToDocId[canonicalCity.toLowerCase()];
+
+      if (correctDocId != null &&
+          (currentCityId != correctDocId || cityNameInDoc != canonicalCity)) {
+        batch.update(doc.reference, {
+          'cityId': correctDocId,
+          'city': canonicalCity,
+        });
         fixed++;
+        continue;
+      }
+
+      if (!validDocIds.contains(currentCityId)) {
+        final fallbackDocId = nameToDocId[cityNameInDoc.toLowerCase()];
+        if (fallbackDocId != null) {
+          batch.update(doc.reference, {'cityId': fallbackDocId});
+          fixed++;
+        }
       }
     }
 

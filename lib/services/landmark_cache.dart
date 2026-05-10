@@ -96,8 +96,12 @@ class LandmarkCache {
   bool needsImageRefresh(String id) {
     final lm = get(id);
     if (lm == null) return true;
+    if (lm.imagePipelineVersion != Landmark.currentImagePipelineVersion) {
+      return true;
+    }
+    if (lm.imagesAreFallback) return true;
     final validCount = lm.mediaUrls.where(_isValidUrl).length;
-    if (validCount < 3 || lm.imageUrl.trim().isEmpty) return true;
+    if (validCount < 1 || lm.imageUrl.trim().isEmpty) return true;
     if (lm.imagesRefreshedAt == null) return true;
     return _isExpired(lm.imagesRefreshedAt!, _imageTtl);
   }
@@ -159,6 +163,12 @@ class LandmarkCache {
       // Images: merge and deduplicate
       imageUrl: mergedMedia.isNotEmpty ? mergedMedia.first : old.imageUrl,
       mediaUrls: mergedMedia,
+      imagePipelineVersion: incoming.imagePipelineVersion >= old.imagePipelineVersion
+          ? incoming.imagePipelineVersion
+          : old.imagePipelineVersion,
+      imagesAreFallback: incoming.imagePipelineVersion >= old.imagePipelineVersion
+          ? incoming.imagesAreFallback
+          : old.imagesAreFallback,
 
       // Coordinates: take non-zero
       lat: incoming.lat != 0 ? incoming.lat : old.lat,
@@ -217,18 +227,15 @@ class LandmarkCache {
       }
     }
 
-    // Existing main image is stable — keep it first
-    if (_isValidUrl(oldMain)) {
-      add(oldMain);
-    } else {
-      add(newMain);
-    }
-
-    for (final u in oldList) add(u);
+    // New verified images must win over old/empty/older images.
+    // This fixes the case where ImageService returns images but the UI keeps
+    // showing an old placeholder/empty main image.
+    add(newMain);
     for (final u in newList) add(u);
-    if (_isValidUrl(newMain)) add(newMain);
+    add(oldMain);
+    for (final u in oldList) add(u);
 
-    return result.take(7).toList();
+    return result.take(6).toList();
   }
 
   List<Map<String, dynamic>> _mergeNearby(
@@ -299,9 +306,7 @@ class LandmarkCache {
 
     // Old external links from Wikimedia/Commons caused 429, PDFs, and decoder
     // crashes. Do not keep them in the in-memory merge result.
-    if (lower.contains('upload.wikimedia.org') ||
-        lower.contains('commons/thumb') ||
-        lower.contains('source.unsplash.com') ||
+    if (lower.contains('source.unsplash.com') ||
         lower.contains('.pdf') ||
         lower.contains('.svg') ||
         lower.contains('.gif') ||

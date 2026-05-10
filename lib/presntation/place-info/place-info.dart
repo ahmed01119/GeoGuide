@@ -1,3 +1,4 @@
+import 'dart:async';
 // ============================================================
 //  presntation/place-info/place-info.dart  (REBUILT LOGIC)
 //
@@ -15,6 +16,8 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'dart:convert';
+import 'package:geoguide/services/firebase_nearby_cache_extension.dart';
+import 'package:geoguide/services/nearby-service.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -52,16 +55,18 @@ Future<void> _launchSafely(
   try {
     bool launched = false;
 
-    if (kIsWeb) {
+    if (uri.scheme == 'http' || uri.scheme == 'https') {
       launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!launched) {
+
+      if (!launched && !kIsWeb) {
         launched = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
       }
+
       if (!launched) {
         launched = await launchUrl(uri, mode: LaunchMode.platformDefault);
       }
+    } else {
+      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
 
     if (!launched && context != null && context.mounted) {
@@ -72,7 +77,9 @@ Future<void> _launchSafely(
         ),
       );
     }
-  } catch (_) {
+  } catch (e) {
+    print('[PlaceInfo] launch failed: $uri error=$e');
+
     if (context != null && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -95,16 +102,6 @@ Future<void> _launchUberRide(
       : '${place.name} ${place.city} Egypt'.trim();
 
   final hasCoords = place.lat != 0 && place.lng != 0;
-  final appUri = Uri.parse(
-    hasCoords
-        ? 'uber://?action=setPickup'
-            '&dropoff[latitude]=${place.lat}'
-            '&dropoff[longitude]=${place.lng}'
-            '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}'
-        : 'uber://?action=setPickup'
-            '&dropoff[formatted_address]=${Uri.encodeComponent(destinationAddress)}'
-            '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}',
-  );
 
   final webUri = Uri.parse(
     hasCoords
@@ -117,18 +114,13 @@ Future<void> _launchUberRide(
             '&dropoff[nickname]=${Uri.encodeComponent(destinationName)}',
   );
 
-  bool launched = false;
-  if (!kIsWeb) {
-    launched = await launchUrl(appUri, mode: LaunchMode.externalApplication);
-  }
-
-  if (!launched) {
-    await _launchSafely(
-      webUri,
-      context: context,
-      errorMessage: 'Could not open Uber.',
-    );
-  }
+  // Use web Uber directly. This avoids ACTIVITY_NOT_FOUND when Uber app
+  // is not installed on Android.
+  await _launchSafely(
+    webUri,
+    context: context,
+    errorMessage: 'Could not open Uber.',
+  );
 }
 
 // ────────────────────────────────────────────────────────────────

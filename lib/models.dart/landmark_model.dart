@@ -1,4 +1,6 @@
 class Landmark {
+  static const int currentImagePipelineVersion = 18;
+
   static bool _isBadImageUrl(String url) {
     final lower = url.trim().toLowerCase();
     const genericFallbackIds = [
@@ -18,9 +20,7 @@ class Landmark {
 
     if (genericFallbackIds.any(lower.contains)) return true;
 
-    return lower.contains('upload.wikimedia.org') ||
-        lower.contains('commons/thumb') ||
-        lower.contains('source.unsplash.com') ||
+    return lower.contains('source.unsplash.com') ||
         lower.contains('.pdf') ||
         lower.contains('.svg') ||
         lower.contains('.gif') ||
@@ -50,6 +50,8 @@ class Landmark {
   final String history;
   final String imageUrl;
   final List<String> mediaUrls;
+  final int imagePipelineVersion;
+  final bool imagesAreFallback;
   final double lat;
   final double lng;
   final String address;
@@ -80,6 +82,8 @@ class Landmark {
     required this.history,
     required this.imageUrl,
     required this.mediaUrls,
+    this.imagePipelineVersion = currentImagePipelineVersion,
+    this.imagesAreFallback = false,
     required this.lat,
     required this.lng,
     required this.address,
@@ -102,13 +106,32 @@ class Landmark {
       return DateTime.tryParse(value.toString());
     }
 
-    final rawImage = (json['imageUrl'] ?? '').toString().trim();
+    int parseInt(dynamic value, [int fallback = currentImagePipelineVersion]) {
+      if (value == null) return fallback;
+      if (value is int) return value;
+      return int.tryParse(value.toString()) ?? fallback;
+    }
+
+    final storedImageVersion = parseInt(
+      json['imagePipelineVersion'],
+      currentImagePipelineVersion,
+    );
+    final storedImagesAreFallback =
+        (json['imagesAreFallback'] ?? false).toString().toLowerCase() == 'true';
+    final allowStoredImages =
+        storedImageVersion == currentImagePipelineVersion;
+
+    final rawImage = allowStoredImages
+        ? (json['imageUrl'] ?? '').toString().trim()
+        : '';
     final image = _isSafeImageUrl(rawImage) ? rawImage : '';
 
-    final media = List<String>.from(json['mediaUrls'] ?? const [])
-        .map((e) => e.toString().trim())
-        .where(_isSafeImageUrl)
-        .toList();
+    final media = allowStoredImages
+        ? List<String>.from(json['mediaUrls'] ?? const [])
+            .map((e) => e.toString().trim())
+            .where(_isSafeImageUrl)
+            .toList()
+        : <String>[];
 
     if (image.isNotEmpty && !media.contains(image)) {
       media.insert(0, image);
@@ -150,7 +173,9 @@ class Landmark {
       fullDescription: fullDescription,
       history: (json['history'] ?? '').toString().trim(),
       imageUrl: image,
-      mediaUrls: media.take(7).toList(),
+      mediaUrls: media.take(6).toList(),
+      imagePipelineVersion: storedImageVersion,
+      imagesAreFallback: storedImagesAreFallback,
       lat: ((json['lat'] ?? 0) as num).toDouble(),
       lng: ((json['lng'] ?? 0) as num).toDouble(),
       address: (json['address'] ?? '').toString().trim(),
@@ -193,8 +218,10 @@ class Landmark {
       'shortDescription': shortDescription.trim(),
       'fullDescription': fullDescription.trim(),
       'history': history.trim(),
-      'imageUrl': imageUrl.trim(),
-      'mediaUrls': media.take(7).toList(),
+      'imageUrl': media.isNotEmpty ? media.first : '',
+      'mediaUrls': media.take(6).toList(),
+      'imagePipelineVersion': imagePipelineVersion,
+      'imagesAreFallback': imagesAreFallback,
       'lat': lat,
       'lng': lng,
       'address': address.trim(),
@@ -226,6 +253,8 @@ class Landmark {
     String? history,
     String? imageUrl,
     List<String>? mediaUrls,
+    int? imagePipelineVersion,
+    bool? imagesAreFallback,
     double? lat,
     double? lng,
     String? address,
@@ -256,6 +285,8 @@ class Landmark {
       history: history ?? this.history,
       imageUrl: imageUrl ?? this.imageUrl,
       mediaUrls: mediaUrls ?? this.mediaUrls,
+      imagePipelineVersion: imagePipelineVersion ?? this.imagePipelineVersion,
+      imagesAreFallback: imagesAreFallback ?? this.imagesAreFallback,
       lat: lat ?? this.lat,
       lng: lng ?? this.lng,
       address: address ?? this.address,

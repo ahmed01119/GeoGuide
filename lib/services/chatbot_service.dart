@@ -1,10 +1,11 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ChatbotService {
   static const String _newAiBaseUrl =
-      "https://mostafa1249687-geoguide-api.hf.space";
+      "https://geoguide-organization-geoguide-api.hf.space";
 
   static const String _ragAiBaseUrl =
       "https://geoguide-organization-geoguide-chatbot-api.hf.space";
@@ -22,13 +23,13 @@ class ChatbotService {
 
     final start = DateTime.now();
 
-    Object? newAiError;
-    Object? ragError;
-
+    // 1) Try New AI first
     try {
       final answer = await _askNewAi(clean);
 
       if (answer.trim().isNotEmpty) {
+        debugPrint('✅ Answer source: New AI');
+
         return ChatbotResponse(
           answer: answer,
           responseTimeSec: _elapsedSeconds(start),
@@ -38,34 +39,36 @@ class ChatbotService {
 
       throw Exception('New AI returned empty answer');
     } catch (e) {
-      newAiError = e;
-  print('❌ New AI failed: $newAiError');
+      debugPrint('⚠️ New AI failed. Switching to RAG fallback...');
+      debugPrint('New AI error: $e');
+    }
 
+    // 2) If New AI fails, use RAG fallback
+    try {
+      await _warmUpRag();
 
-      try {
-        final fallbackResponse = await _askRagFallback(clean);
+      final fallbackResponse = await _askRagFallback(clean);
 
-        if (fallbackResponse.answer.trim().isNotEmpty) {
-          return fallbackResponse.copyWith(
-            source: ChatbotSource.ragFallback,
-            responseTimeSec: fallbackResponse.responseTimeSec == 0
-                ? _elapsedSeconds(start)
-                : fallbackResponse.responseTimeSec,
-          );
-        }
+      if (fallbackResponse.answer.trim().isNotEmpty) {
+        debugPrint('✅ Answer source: RAG fallback');
 
-        throw Exception('RAG returned empty answer');
-      } catch (e) {
-        ragError = e;
-print('❌ RAG fallback failed: $ragError');
-        return ChatbotResponse(
-  answer:
-      'Could not connect to AI services. Please try again later.',
-  responseTimeSec: _elapsedSeconds(start),
-  source: ChatbotSource.error,
-);
-
+        return fallbackResponse.copyWith(
+          source: ChatbotSource.ragFallback,
+          responseTimeSec: fallbackResponse.responseTimeSec == 0
+              ? _elapsedSeconds(start)
+              : fallbackResponse.responseTimeSec,
+        );
       }
+
+      throw Exception('RAG returned empty answer');
+    } catch (e) {
+      debugPrint('❌ RAG fallback failed: $e');
+
+      return ChatbotResponse(
+        answer: 'Could not connect to AI services. Please try again later.',
+        responseTimeSec: _elapsedSeconds(start),
+        source: ChatbotSource.error,
+      );
     }
   }
 
@@ -104,7 +107,7 @@ print('❌ RAG fallback failed: $ragError');
             'question': question,
           }),
         )
-        .timeout(const Duration(seconds: 120));
+        .timeout(const Duration(seconds: 240));
 
     if (response.statusCode != 200) {
       throw Exception(
@@ -115,7 +118,9 @@ print('❌ RAG fallback failed: $ragError');
     final data = jsonDecode(response.body) as Map<String, dynamic>;
 
     if (data['error'] != null) {
-      throw Exception('RAG API error: ${data['error']} ${data['details'] ?? ''}');
+      throw Exception(
+        'RAG API error: ${data['error']} ${data['details'] ?? ''}',
+      );
     }
 
     return ChatbotResponse(
@@ -125,16 +130,35 @@ print('❌ RAG fallback failed: $ragError');
     );
   }
 
+  Future<void> _warmUpRag() async {
+    try {
+      await http
+          .get(Uri.parse('$_ragAiBaseUrl/health'))
+          .timeout(const Duration(seconds: 30));
+    } catch (_) {
+      // Ignore warm-up errors and continue to /chat
+    }
+  }
+
   String _formatNewAiResponse(Map<String, dynamic> data) {
     if (data['answer'] != null) {
-      return data['answer'].toString().trim();
+      final answer = data['answer'].toString().trim();
+      if (answer.isNotEmpty) return answer;
     }
 
     final title = data['title']?.toString() ?? '';
     final location = data['location']?.toString() ?? '';
     final content = data['content']?.toString() ?? '';
-    final historicalFacts = List<String>.from(data['historical_facts'] ?? []);
-    final travelTips = List<String>.from(data['travel_tips'] ?? []);
+
+    final historicalFacts = (data['historical_facts'] as List?)
+            ?.map((e) => e.toString())
+            .toList() ??
+        [];
+
+    final travelTips = (data['travel_tips'] as List?)
+            ?.map((e) => e.toString())
+            .toList() ??
+        [];
 
     final buffer = StringBuffer();
 
@@ -171,7 +195,7 @@ print('❌ RAG fallback failed: $ragError');
     final result = buffer.toString().trim();
 
     if (result.isEmpty) {
-      throw Exception('New AI response format is empty: $data');
+      throw Exception('New AI response format is empty');
     }
 
     return result;

@@ -284,7 +284,21 @@ extension _HomeSearchPlacesSection on _HomeState {
       );
     }
     if (!_searchActive && _selectedCity == null && places.isEmpty) {
-      return _loadingCard('Finding the best places for you…');
+      if (_homeLoading) {
+        return _loadingCard('Finding the best places for you…');
+      }
+
+      return _emptyStateCard(
+        icon: _homeLoadFailed
+            ? Icons.wifi_off_rounded
+            : Icons.travel_explore_rounded,
+        title: _homeLoadFailed
+            ? 'Could not load places right now'
+            : 'No places found yet',
+        subtitle: _homeLoadFailed
+            ? 'Check your connection, then try refreshing again.'
+            : 'Try searching for a place or choose a city.',
+      );
     }
 
     return Container(

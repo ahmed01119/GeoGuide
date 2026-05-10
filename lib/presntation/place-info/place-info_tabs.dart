@@ -130,19 +130,26 @@ class _DetailsTab extends StatelessWidget {
               label: 'Book & Reserve', icon: Icons.local_activity_rounded),
           const SizedBox(height: 12),
           _PremiumBookingSection(place: place),
-          if ((place.wikipediaUrl ?? '').trim().isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const _SectionLabel(label: 'Wikipedia', icon: Icons.menu_book_rounded),
-            const SizedBox(height: 8),
-            _InfoTile(
-              icon: Icons.open_in_new_rounded,
-              value: 'Open article',
-              accentColor: _kBrownMed,
-              isLink: true,
-              onTap: () =>
-                  _launchSafely(Uri.parse(place.wikipediaUrl!), context: context),
-            ),
-          ],
+          const SizedBox(height: 16),
+          const _SectionLabel(label: 'Wikipedia', icon: Icons.menu_book_rounded),
+          const SizedBox(height: 8),
+          _InfoTile(
+            icon: Icons.open_in_new_rounded,
+            value: (place.wikipediaUrl ?? '').trim().isNotEmpty
+                ? 'Open article'
+                : 'Search article on Wikipedia',
+            accentColor: _kBrownMed,
+            isLink: true,
+            onTap: () {
+              final direct = (place.wikipediaUrl ?? '').trim();
+              final uri = direct.isNotEmpty
+                  ? Uri.parse(direct)
+                  : Uri.parse(
+                      'https://en.wikipedia.org/w/index.php?search=${Uri.encodeComponent('${place.name} ${place.city} Egypt')}',
+                    );
+              _launchSafely(uri, context: context);
+            },
+          ),
           StreamBuilder<Map<String, String>>(
             stream: firebase.bookingLinksStream(place.id),
             builder: (context, snap) {

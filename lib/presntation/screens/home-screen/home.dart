@@ -62,6 +62,8 @@ class _HomeState extends State<Home> {
   bool _fetchingSuggestions = false;
   bool _generatingPlan = false;
   bool _searchFieldFocused = false;
+  bool _homeLoading = true;
+  bool _homeLoadFailed = false;
 
   City? _selectedCity;
   String? _lastCityId;

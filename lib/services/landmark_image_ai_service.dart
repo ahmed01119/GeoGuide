@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
@@ -24,55 +23,65 @@ class AiImageDetails {
   });
 
   factory AiImageDetails.fromJson(Map<String, dynamic> json) {
-    final metadata = json['metadata'] ?? {};
+    final metadataRaw = json['metadata'];
+    final metadata =
+        metadataRaw is Map<String, dynamic> ? metadataRaw : <String, dynamic>{};
 
     return AiImageDetails(
-      title: json['title'] ?? '',
-      location: json['location'] ?? '',
-      content: json['content'] ?? '',
-      historicalFacts: List<String>.from(json['historical_facts'] ?? []),
-      travelTips: List<String>.from(json['travel_tips'] ?? []),
-      category: metadata['category'] ?? '',
-      tags: List<String>.from(metadata['tags'] ?? []),
+      title: (json['title'] ?? '').toString(),
+      location: (json['location'] ?? '').toString(),
+      content: (json['content'] ?? '').toString(),
+      historicalFacts: (json['historical_facts'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      travelTips: (json['travel_tips'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      category: (metadata['category'] ?? '').toString(),
+      tags: (metadata['tags'] as List?)?.map((e) => e.toString()).toList() ?? [],
     );
   }
 }
 
 class LandmarkImageAiService {
-  //   static const String laptopIp = '192.168.1.6'; // غيريه لـ IP جهازك
+  static const String baseUrl =
+      'https://geoguide-organization-geoguide-api.hf.space';
 
-  // static String get baseUrl {
-  //   if (kIsWeb) {
-  //     return 'http://localhost:3000';
-  //   }
-
-  //   // Android Emulator
-  //   return 'http://10.0.2.2:3000';
-
-  //   // Real Android/iPhone device
-  //   //return 'http://$laptopIp:3000';
-  // }
-static const String baseUrl =
-    "https://mostafa1249687-geoguide-api.hf.space";
   Future<AiImageDetails> describeImage(XFile imageFile) async {
     final bytes = await imageFile.readAsBytes();
     final base64Image = base64Encode(bytes);
 
-    final response = await http.post(
-      Uri.parse('$baseUrl/api/describe'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'image': base64Image,
-        'mimeType': imageFile.mimeType ?? 'image/jpeg',
-      }),
-    );
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/api/describe'),
+          headers: const {
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'image': base64Image,
+            'mimeType': imageFile.mimeType ?? 'image/jpeg',
+          }),
+        )
+        .timeout(const Duration(seconds: 120));
 
-    final data = jsonDecode(response.body);
+    Map<String, dynamic> data = {};
+
+    try {
+      data = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw Exception(
+        'Image AI returned non-JSON response: ${response.statusCode}',
+      );
+    }
 
     if (response.statusCode == 200) {
       return AiImageDetails.fromJson(data);
-    } else {
-      throw Exception(data['error'] ?? 'Failed to describe image');
     }
+
+    throw Exception(
+      data['error'] ?? 'Failed to describe image: ${response.statusCode}',
+    );
   }
 }

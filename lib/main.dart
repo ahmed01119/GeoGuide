@@ -67,15 +67,15 @@ Future<void> keepOnlyTenLandmarks() async {
 
     print('Total landmarks: ${snapshot.docs.length}');
 
-    if (snapshot.docs.length <= 10) {
-      print('Already 10 or less.');
+    if (snapshot.docs.length <= 3) {
+      print('Already 3 or less.');
       return;
     }
 
     final batch = firestore.batch();
 
     // سيب أول 10 وامسح الباقي
-    for (int i = 10; i < snapshot.docs.length; i++) {
+    for (int i = 3; i < snapshot.docs.length; i++) {
       final doc = snapshot.docs[i];
 
       print('Deleting: ${doc.id}');
@@ -112,8 +112,6 @@ Future<void> main() async {
     await CacheHelper.saveData(key: 'seeded', value: true);
   }
   FlutterNativeSplash.remove();
-await clearBadImageLinksFromFirestore();
-await clearImagesFromFirestore();
   runApp(
     MultiBlocProvider(
       providers: [

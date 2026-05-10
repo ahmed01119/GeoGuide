@@ -1,9 +1,23 @@
 part of 'place-info.dart';
 
 // ════════════════════════════════════════════════════════════════
-//  NEARBY TAB  (same as before but uses FirebaseService directly)
+//  NEARBY TAB — Firebase first + free API reload + persistent cache
 // ════════════════════════════════════════════════════════════════
-enum _NearbyFilter { all, attractions, hotels, dining }
+//
+// Required imports in the parent place-info.dart file:
+// import 'package:geoguide/services/nearby-service.dart';
+// import 'package:geoguide/services/firebase_nearby_cache_extension.dart';
+//
+// Behavior:
+// - Shows cached nearbyPlaces immediately.
+// - Merges Firebase nearby suggestions without replacing old items.
+// - Uses NearbyService for free Nominatim + Overpass fallback.
+// - Adds Outing places.
+// - Saves generated/loaded nearby places back to landmarks/{placeId}.nearbyPlaces.
+// - On next screen open, cached places appear immediately without Refresh.
+// - Strong dedupe prevents repeated places.
+
+enum _NearbyFilter { all, attractions, hotels, dining, outing }
 
 class _NearbyItem {
   final String name;
@@ -13,6 +27,10 @@ class _NearbyItem {
   final double lng;
   final double rating;
   final bool isLive;
+  final String? bookingUrl;
+  final String? website;
+  final String? mapsUrl;
+  final String? wikipediaUrl;
 
   const _NearbyItem({
     required this.name,
@@ -22,23 +40,51 @@ class _NearbyItem {
     required this.lng,
     required this.rating,
     this.isLive = false,
+    this.bookingUrl,
+    this.website,
+    this.mapsUrl,
+    this.wikipediaUrl,
   });
+
+  String get dedupeKey {
+    return '${_normalize(name)}|${_normalize(category)}';
+  }
+
+  static String _normalize(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('&', 'and')
+        .replaceAll(RegExp(r'[\u064B-\u065F]'), '')
+        .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
 }
 
 class _NearbyTab extends StatefulWidget {
   final Landmark place;
   final FirebaseService firebase;
 
-  const _NearbyTab({required this.place, required this.firebase});
+  const _NearbyTab({
+    required this.place,
+    required this.firebase,
+  });
 
   @override
   State<_NearbyTab> createState() => _NearbyTabState();
 }
 
 class _NearbyTabState extends State<_NearbyTab> {
+  final NearbyService _nearbyService = NearbyService();
+
   _NearbyFilter _filter = _NearbyFilter.all;
   List<_NearbyItem> _items = [];
+
   bool _loading = true;
+  bool _checkingLive = false;
+  bool _savingCache = false;
+  String? _statusMessage;
+  String? _lastSavedSignature;
 
   double get _lat => widget.place.lat;
   double get _lng => widget.place.lng;
@@ -46,42 +92,64 @@ class _NearbyTabState extends State<_NearbyTab> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadInitial();
   }
 
-  Future<void> _load() async {
-    _loadFromLandmark();
-    await _loadFromFirebase();
-    if (_lat != 0 && _lng != 0) _fetchLive();
+  Future<void> _loadInitial() async {
+    setState(() {
+      _loading = true;
+      _statusMessage = null;
+    });
+
+    _loadFromLandmarkCache();
+    await _loadFromFirebaseSuggestions();
+
+    if (mounted) {
+      setState(() => _loading = false);
+    }
+
+    if (_lat != 0 && _lng != 0) {
+      await _reloadFreeApis(forceRefresh: false);
+    }
   }
 
-  void _loadFromLandmark() {
+  void _loadFromLandmarkCache() {
     final cached = widget.place.nearbyPlaces;
     if (cached.isEmpty) return;
 
     final items = <_NearbyItem>[];
+
     for (final item in cached) {
       final name = (item['name'] ?? '').toString().trim();
       if (name.isEmpty) continue;
-      items.add(_NearbyItem(
-        name: name,
-        category: _mapCat((item['category'] ?? 'tourist').toString()),
-        address: (item['address'] ?? widget.place.city).toString(),
-        lat: ((item['lat'] ?? 0) as num).toDouble(),
-        lng: ((item['lng'] ?? 0) as num).toDouble(),
-        rating: ((item['rating'] ?? 0) as num).toDouble(),
-      ));
+
+      items.add(
+        _NearbyItem(
+          name: name,
+          category: _mapCat((item['category'] ?? 'tourist').toString()),
+          address: (item['address'] ?? widget.place.city).toString(),
+          lat: ((item['lat'] ?? 0) as num).toDouble(),
+          lng: ((item['lng'] ?? 0) as num).toDouble(),
+          rating: ((item['rating'] ?? 0) as num).toDouble(),
+          isLive: false,
+          bookingUrl: item['bookingUrl']?.toString(),
+          website: item['website']?.toString(),
+          mapsUrl: item['mapsUrl']?.toString(),
+          wikipediaUrl: item['wikipediaUrl']?.toString(),
+        ),
+      );
     }
 
-    if (mounted && items.isNotEmpty) {
-      setState(() {
-        _items = items;
-        _loading = false;
-      });
+    if (items.isNotEmpty) {
+      _mergeItems(
+        items,
+        message: 'Stored nearby places loaded',
+      );
+      _lastSavedSignature = _itemsSignature(_items);
     }
   }
 
-  Future<void> _loadFromFirebase() async {
+  Future<void> _loadFromFirebaseSuggestions() async {
     try {
       final snapshot = await widget.firebase
           .nearbySuggestionsStream(
@@ -96,124 +164,375 @@ class _NearbyTabState extends State<_NearbyTab> {
       if (!mounted) return;
 
       final items = snapshot
-          .map((lm) => _NearbyItem(
-                name: lm.name,
-                category: _mapCat(lm.category),
-                address: lm.address.isNotEmpty ? lm.address : lm.city,
-                lat: lm.lat,
-                lng: lm.lng,
-                rating: lm.rating,
-              ))
+          .map(
+            (lm) => _NearbyItem(
+              name: lm.name,
+              category: _mapCat(lm.category),
+              address: lm.address.isNotEmpty ? lm.address : lm.city,
+              lat: lm.lat,
+              lng: lm.lng,
+              rating: lm.rating,
+              isLive: false,
+              mapsUrl: lm.lat != 0 && lm.lng != 0
+                  ? 'https://www.google.com/maps/search/?api=1&query=${lm.lat},${lm.lng}'
+                  : null,
+              wikipediaUrl: lm.wikipediaUrl,
+            ),
+          )
+          .where((item) => item.name.trim().isNotEmpty)
           .toList();
 
-      if (mounted) {
-        setState(() {
-          _items = items;
-          _loading = false;
-        });
-      }
+      _mergeItems(
+        items,
+        message: items.isNotEmpty ? 'Firebase nearby places loaded' : null,
+      );
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      // Keep cached UI. Free API reload will try after this.
     }
   }
 
-  Future<void> _fetchLive() async {
+  Future<void> _reloadFreeApis({required bool forceRefresh}) async {
     if (_lat == 0 || _lng == 0) return;
+    if (_checkingLive) return;
+
+    setState(() {
+      _checkingLive = true;
+      _statusMessage = 'Checking for new nearby places...';
+    });
+
     try {
-      final query = '''
-[out:json][timeout:25];
-(
-  node["amenity"~"restaurant|cafe|fast_food"](around:2500,$_lat,$_lng);
-  node["tourism"~"hotel|guest_house|hostel|motel"](around:3000,$_lat,$_lng);
-  node["tourism"~"attraction|museum|viewpoint|gallery"](around:3500,$_lat,$_lng);
-  node["historic"](around:3500,$_lat,$_lng);
-);
-out center tags;
-''';
+      final existing = _items.map(_toNearbyPlace).toList();
 
-      final response = await http.post(
-        Uri.parse('https://overpass-api.de/api/interpreter'),
-        body: {'data': query},
-      ).timeout(const Duration(seconds: 28));
-      if (response.statusCode != 200) return;
+      final result = await _nearbyService.getNearbyWithAutoRefresh(
+        lat: _lat,
+        lng: _lng,
+        cityName: widget.place.city,
+        existingPlaces: existing,
+        categories: _categoriesForFilter(_filter),
+        limit: 36,
+        forceRefresh: forceRefresh,
+      );
 
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final elements = (data['elements'] as List? ?? []).cast<Map<String, dynamic>>();
-      final seen = <String>{};
-      final liveItems = <_NearbyItem>[];
+      if (!mounted) return;
 
-      for (final el in elements) {
-        final tags = (el['tags'] as Map?)?.cast<String, dynamic>() ?? {};
-        final name = (tags['name'] ?? '').toString().trim();
-        if (name.isEmpty) continue;
+      final before = _items.length;
 
-        final itemLat = ((el['lat'] ?? el['center']?['lat'] ?? 0) as num).toDouble();
-        final itemLng = ((el['lon'] ?? el['center']?['lon'] ?? 0) as num).toDouble();
-        if (itemLat == 0 || itemLng == 0) continue;
+      final incoming = result.places
+          .map(_fromNearbyPlace)
+          .where((item) => item.name.trim().isNotEmpty)
+          .toList();
 
-        final amenity = (tags['amenity'] ?? '').toString().toLowerCase();
-        final tourism = (tags['tourism'] ?? '').toString().toLowerCase();
-        final historic = (tags['historic'] ?? '').toString().toLowerCase();
+      _mergeItems(
+        incoming,
+        message: null,
+      );
 
-        String category = 'tourist';
-        if (amenity == 'restaurant' || amenity == 'fast_food') {
-          category = 'restaurant';
-        } else if (amenity == 'cafe') {
-          category = 'cafe';
-        } else if (tourism == 'hotel' ||
-            tourism == 'guest_house' ||
-            tourism == 'hostel' ||
-            tourism == 'motel') {
-          category = 'hotel';
-        } else if (tourism.isNotEmpty || historic.isNotEmpty) {
-          category = 'tourist';
-        }
+      final added = _items.length - before;
 
-        final addr = _composeAddress(tags);
-        final key = '${name.toLowerCase()}|$category';
-        if (!seen.add(key)) continue;
-
-        liveItems.add(_NearbyItem(
-          name: name,
-          category: category,
-          address: addr,
-          lat: itemLat,
-          lng: itemLng,
-          rating: 0,
-          isLive: true,
-        ));
+      if (added > 0 || result.didRefresh || forceRefresh) {
+        await _persistNearbyCache();
       }
 
       if (!mounted) return;
-      final existingKeys = _items.map((e) => e.name.toLowerCase()).toSet();
-      final newLive =
-          liveItems.where((e) => !existingKeys.contains(e.name.toLowerCase())).toList();
-      final merged = [..._items, ...newLive];
-      merged.sort((a, b) => _dist(a.lat, a.lng).compareTo(_dist(b.lat, b.lng)));
-      setState(() => _items = merged.take(80).toList());
-    } catch (_) {}
+
+      setState(() {
+        if (added > 0) {
+          _statusMessage =
+              '$added new nearby place${added == 1 ? '' : 's'} added and saved';
+        } else if (_items.isNotEmpty) {
+          _statusMessage = 'Nearby places are up to date';
+        } else {
+          _statusMessage = 'No nearby places found yet';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _statusMessage = _items.isNotEmpty
+            ? 'Showing stored places. Live reload is unavailable now.'
+            : 'Live nearby search is unavailable now.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _checkingLive = false);
+      }
+    }
   }
 
-  String _composeAddress(Map<String, dynamic> tags) {
-    final parts = [
-      (tags['addr:street'] ?? '').toString().trim(),
-      (tags['addr:city'] ?? '').toString().trim(),
-    ].where((e) => e.isNotEmpty).toList();
-    return parts.isNotEmpty ? parts.join(', ') : widget.place.city;
+  Future<void> _persistNearbyCache() async {
+    if (_savingCache) return;
+    if (widget.place.id.trim().isEmpty) return;
+    if (_items.isEmpty) return;
+
+    final signature = _itemsSignature(_items);
+    if (_lastSavedSignature == signature) return;
+
+    _savingCache = true;
+
+    try {
+      final places = _items.map(_toNearbyPlace).map((p) => p.toJson()).toList();
+
+      await widget.firebase.saveNearbyPlacesForLandmark(
+        placeId: widget.place.id,
+        nearbyPlaces: places,
+      );
+
+      _lastSavedSignature = signature;
+
+      if (mounted) {
+        setState(() => _statusMessage = 'Nearby places saved for next time');
+      }
+
+      print('[Nearby] cached ${places.length} nearby places for ${widget.place.name}');
+    } catch (e) {
+      print('[Nearby] cache save failed: $e');
+    } finally {
+      _savingCache = false;
+    }
+  }
+
+  String _itemsSignature(List<_NearbyItem> items) {
+    final keys = items.map((e) => e.dedupeKey).toList()..sort();
+    return keys.join('|');
+  }
+
+  bool _isCurrentPlaceItem(_NearbyItem item) {
+    final itemName = _normalizePlaceName(item.name);
+    final placeName = _normalizePlaceName(widget.place.name);
+
+    if (itemName.isEmpty || placeName.isEmpty) return false;
+
+    if (itemName == placeName) return true;
+
+    // Handles small variants like "Khan el Khalili Bazaar" vs "Khan el-Khalili".
+    if (itemName.contains(placeName) || placeName.contains(itemName)) {
+      final diff = (itemName.length - placeName.length).abs();
+      return diff <= 12;
+    }
+
+    return false;
+  }
+
+  String _normalizePlaceName(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('&', 'and')
+        .replaceAll(RegExp(r'[\u064B-\u065F]'), '')
+        .replaceAll(RegExp(r'\b(the|of|el|al|and|egypt|cairo|giza)\b'), ' ')
+        .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  NearbyPlace _toNearbyPlace(_NearbyItem item) {
+    return NearbyPlace(
+      placeId: 'ui_${item.dedupeKey}',
+      name: item.name,
+      address: item.address,
+      lat: item.lat,
+      lng: item.lng,
+      distanceKm: _distKm(item.lat, item.lng),
+      rating: item.rating,
+      userRatingsTotal: 0,
+      priceLevel: '',
+      isOpenNow: false,
+      hasOpeningHours: false,
+      imageUrl: '',
+      category: item.category,
+      types: const [],
+      mapsUrl: item.mapsUrl ??
+          'https://www.google.com/maps/search/?api=1&query=${item.lat},${item.lng}',
+      bookingUrl: item.bookingUrl,
+      wikipediaUrl: item.wikipediaUrl,
+      website: item.website,
+      fetchedAt: DateTime.now(),
+    );
+  }
+
+  _NearbyItem _fromNearbyPlace(NearbyPlace place) {
+    return _NearbyItem(
+      name: place.name,
+      category: _mapCat(place.category),
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+      rating: place.rating,
+      isLive: true,
+      bookingUrl: place.bookingUrl,
+      website: place.website,
+      mapsUrl: place.mapsUrl,
+      wikipediaUrl: place.wikipediaUrl,
+    );
+  }
+
+  void _mergeItems(
+    List<_NearbyItem> incoming, {
+    String? message,
+  }) {
+    if (incoming.isEmpty) {
+      if (message != null && mounted) {
+        setState(() => _statusMessage = message);
+      }
+      return;
+    }
+
+    final merged = <_NearbyItem>[];
+    final seen = <String>{};
+
+    for (final item in [..._items, ...incoming]) {
+      final name = item.name.trim();
+      if (name.isEmpty) continue;
+
+      // Do not show the current opened landmark inside its own Nearby tab.
+      // Example: Khan el-Khalili page must not list Khan el-Khalili as nearby.
+      if (_isCurrentPlaceItem(item)) continue;
+
+      final key = item.dedupeKey;
+      if (!seen.add(key)) continue;
+
+      merged.add(item);
+    }
+
+    merged.sort((a, b) {
+      final da = _distKm(a.lat, a.lng);
+      final db = _distKm(b.lat, b.lng);
+
+      final scoreA = _itemScore(a, da);
+      final scoreB = _itemScore(b, db);
+
+      return scoreB.compareTo(scoreA);
+    });
+
+    if (!mounted) return;
+
+    setState(() {
+      _items = merged.take(90).toList();
+      if (message != null) _statusMessage = message;
+    });
+  }
+
+  double _itemScore(_NearbyItem item, double distanceKm) {
+    double score = 0;
+
+    if (distanceKm > 0 && distanceKm < 999) {
+      score += 40 - distanceKm.clamp(0, 40);
+    }
+
+    if (item.rating > 0) score += item.rating * 5;
+
+    switch (item.category) {
+      case 'tourist':
+        score += 8;
+        break;
+      case 'outing':
+        score += 7;
+        break;
+      case 'hotel':
+        score += 4;
+        break;
+      case 'restaurant':
+        score += 4;
+        break;
+      case 'cafe':
+        score += 3;
+        break;
+    }
+
+    final name = item.name.toLowerCase();
+    const famous = [
+      'museum',
+      'tower',
+      'opera',
+      'palace',
+      'citadel',
+      'park',
+      'garden',
+      'mall',
+      'zoo',
+      'aquarium',
+      'cinema',
+      'متحف',
+      'برج',
+      'قصر',
+      'حديقة',
+      'مول',
+      'سينما',
+    ];
+
+    if (famous.any(name.contains)) score += 4;
+
+    return score;
+  }
+
+  List<String> _categoriesForFilter(_NearbyFilter filter) {
+    switch (filter) {
+      case _NearbyFilter.hotels:
+        return const ['hotel'];
+      case _NearbyFilter.dining:
+        return const ['restaurant', 'cafe'];
+      case _NearbyFilter.attractions:
+        return const ['tourist'];
+      case _NearbyFilter.outing:
+        return const ['outing'];
+      case _NearbyFilter.all:
+        return const ['hotel', 'restaurant', 'cafe', 'tourist', 'outing'];
+    }
   }
 
   String _mapCat(String raw) {
     final cat = raw.toLowerCase();
-    if (cat.contains('hotel') || cat.contains('resort')) return 'hotel';
-    if (cat.contains('restaurant') || cat.contains('food')) return 'restaurant';
-    if (cat.contains('cafe') || cat.contains('coffee')) return 'cafe';
-    if (cat.contains('park') || cat.contains('outing')) return 'outing';
+
+    if (cat.contains('hotel') ||
+        cat.contains('resort') ||
+        cat.contains('hostel') ||
+        cat.contains('guest')) {
+      return 'hotel';
+    }
+
+    if (cat.contains('restaurant') ||
+        cat.contains('food') ||
+        cat.contains('مطعم')) {
+      return 'restaurant';
+    }
+
+    if (cat.contains('cafe') ||
+        cat.contains('coffee') ||
+        cat.contains('bakery') ||
+        cat.contains('pastry') ||
+        cat.contains('dessert') ||
+        cat.contains('مقهى') ||
+        cat.contains('كافيه')) {
+      return 'cafe';
+    }
+
+    if (cat.contains('park') ||
+        cat.contains('garden') ||
+        cat.contains('outing') ||
+        cat.contains('mall') ||
+        cat.contains('cinema') ||
+        cat.contains('theatre') ||
+        cat.contains('zoo') ||
+        cat.contains('aquarium') ||
+        cat.contains('theme') ||
+        cat.contains('leisure') ||
+        cat.contains('حديقة') ||
+        cat.contains('مول') ||
+        cat.contains('سينما') ||
+        cat.contains('خروجات')) {
+      return 'outing';
+    }
+
     return 'tourist';
   }
 
-  double _dist(double lat, double lng) {
+  double _distKm(double lat, double lng) {
     if (_lat == 0 || _lng == 0 || lat == 0 || lng == 0) return 9999;
-    return (lat - _lat).abs() + (lng - _lng).abs();
+
+    // Lightweight approximate distance in km.
+    // Good enough for sorting nearby UI items.
+    final dLat = (lat - _lat).abs() * 111.0;
+    final dLng = (lng - _lng).abs() * 111.0;
+    return dLat + dLng;
   }
 
   List<_NearbyItem> get _filtered {
@@ -225,7 +544,9 @@ out center tags;
             .where((e) => e.category == 'restaurant' || e.category == 'cafe')
             .toList();
       case _NearbyFilter.attractions:
-        return _items.where((e) => e.category == 'tourist' || e.category == 'outing').toList();
+        return _items.where((e) => e.category == 'tourist').toList();
+      case _NearbyFilter.outing:
+        return _items.where((e) => e.category == 'outing').toList();
       case _NearbyFilter.all:
         return _items;
     }
@@ -291,11 +612,22 @@ out center tags;
     }
   }
 
+  Future<void> _onFilterChanged(_NearbyFilter filter) async {
+    setState(() => _filter = filter);
+
+    final currentFiltered = _filtered;
+
+    if (currentFiltered.isEmpty && _lat != 0 && _lng != 0) {
+      await _reloadFreeApis(forceRefresh: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final chips = [
       (_NearbyFilter.all, 'All', Icons.grid_view_rounded),
       (_NearbyFilter.attractions, 'Attractions', Icons.photo_camera_rounded),
+      (_NearbyFilter.outing, 'Outing', Icons.park_rounded),
       (_NearbyFilter.hotels, 'Hotels', Icons.hotel_rounded),
       (_NearbyFilter.dining, 'Dining', Icons.restaurant_rounded),
     ];
@@ -311,10 +643,11 @@ out center tags;
               return Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: GestureDetector(
-                  onTap: () => setState(() => _filter = c.$1),
+                  onTap: () => _onFilterChanged(c.$1),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
                     decoration: BoxDecoration(
                       color: selected ? _kBrown : Colors.white,
                       borderRadius: BorderRadius.circular(30),
@@ -326,7 +659,11 @@ out center tags;
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(c.$3, size: 15, color: selected ? Colors.white : _kTextMid),
+                        Icon(
+                          c.$3,
+                          size: 15,
+                          color: selected ? Colors.white : _kTextMid,
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           c.$2,
@@ -344,51 +681,143 @@ out center tags;
             }).toList(),
           ),
         ),
+        if (_statusMessage != null || _checkingLive || _savingCache)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F1EB),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: _kBorder),
+              ),
+              child: Row(
+                children: [
+                  if (_checkingLive || _savingCache) ...[
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _kBrownMed,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ] else ...[
+                    const Icon(
+                      Icons.sync_rounded,
+                      size: 15,
+                      color: _kBrownMed,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: Text(
+                      _savingCache
+                          ? 'Saving nearby places...'
+                          : (_statusMessage ?? 'Updating nearby places...'),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: _kTextMid,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  InkWell(
+                    onTap: _checkingLive || _savingCache
+                        ? null
+                        : () => _reloadFreeApis(forceRefresh: true),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      child: Text(
+                        'Reload',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _kBrown,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator(color: _kBrownMed))
-              : _filtered.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+          child: RefreshIndicator(
+            color: _kBrownMed,
+            onRefresh: () => _reloadFreeApis(forceRefresh: true),
+            child: _loading && _items.isEmpty
+                ? const Center(
+                    child: CircularProgressIndicator(color: _kBrownMed),
+                  )
+                : _filtered.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
                         children: [
-                          Container(
-                            width: 68,
-                            height: 68,
-                            decoration: BoxDecoration(
-                              color: _kBrownLight,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: const Icon(Icons.place_rounded, size: 34, color: _kBrownMed),
-                          ),
-                          const SizedBox(height: 14),
-                          const Text(
-                            'No nearby places found',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15,
-                              color: _kTextMid,
+                          SizedBox(
+                            height: MediaQuery.of(context).size.height * 0.35,
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    width: 68,
+                                    height: 68,
+                                    decoration: BoxDecoration(
+                                      color: _kBrownLight,
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: const Icon(
+                                      Icons.place_rounded,
+                                      size: 34,
+                                      color: _kBrownMed,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  const Text(
+                                    'No nearby places found',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
+                                      color: _kTextMid,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextButton.icon(
+                                    onPressed: _checkingLive || _savingCache
+                                        ? null
+                                        : () => _reloadFreeApis(
+                                              forceRefresh: true,
+                                            ),
+                                    icon: const Icon(Icons.refresh_rounded),
+                                    label: const Text('Reload nearby places'),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ],
+                      )
+                    : ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
+                        itemCount: _filtered.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (_, idx) {
+                          final item = _filtered[idx];
+                          return _NearbyItemTile(
+                            item: item,
+                            catColor: _catColor(item.category),
+                            catBg: _catBg(item.category),
+                            catIcon: _catIcon(item.category),
+                            catLabel: _catLabel(item),
+                            placeCity: widget.place.city,
+                          );
+                        },
                       ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
-                      itemCount: _filtered.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (_, idx) {
-                        final item = _filtered[idx];
-                        return _NearbyItemTile(
-                          item: item,
-                          catColor: _catColor(item.category),
-                          catBg: _catBg(item.category),
-                          catIcon: _catIcon(item.category),
-                          catLabel: _catLabel(item),
-                          placeCity: widget.place.city,
-                        );
-                      },
-                    ),
+          ),
         ),
       ],
     );
@@ -413,20 +842,54 @@ class _NearbyItemTile extends StatelessWidget {
   });
 
   Future<void> _openMaps(BuildContext context) async {
-    final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=${item.lat},${item.lng}');
+    final raw = item.mapsUrl?.trim();
+    final Uri uri;
+
+    if (raw != null && raw.isNotEmpty) {
+      uri = Uri.parse(raw);
+    } else if (item.lat != 0 && item.lng != 0) {
+      uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=${item.lat},${item.lng}',
+      );
+    } else {
+      final q = Uri.encodeComponent('${item.name} $placeCity Egypt');
+      uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
+    }
+
     await _launchSafely(uri, context: context);
   }
 
   Future<void> _book(BuildContext context) async {
+    final directBooking = item.bookingUrl?.trim();
+    final website = item.website?.trim();
+
+    if (directBooking != null && directBooking.isNotEmpty) {
+      await _launchSafely(Uri.parse(directBooking), context: context);
+      return;
+    }
+
+    if (website != null && website.isNotEmpty) {
+      await _launchSafely(Uri.parse(website), context: context);
+      return;
+    }
+
     final q = Uri.encodeComponent('${item.name} $placeCity Egypt');
     final Uri uri;
+
     if (item.category == 'hotel') {
-      uri = Uri.parse('https://www.booking.com/searchresults.html?ss=${Uri.encodeComponent(item.name)}');
+      uri = Uri.parse(
+        'https://www.booking.com/searchresults.html?ss=${Uri.encodeComponent(item.name)}',
+      );
     } else if (item.category == 'restaurant' || item.category == 'cafe') {
-      uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=${item.lat},${item.lng}');
+      uri = item.lat != 0 && item.lng != 0
+          ? Uri.parse(
+              'https://www.google.com/maps/search/?api=1&query=${item.lat},${item.lng}',
+            )
+          : Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
     } else {
       uri = Uri.parse('https://www.viator.com/searchResults/all?text=$q');
     }
+
     await _launchSafely(uri, context: context);
   }
 
@@ -438,7 +901,11 @@ class _NearbyItemTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _kBorder),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
         ],
       ),
       child: Column(
@@ -451,7 +918,10 @@ class _NearbyItemTile extends StatelessWidget {
                 Container(
                   width: 52,
                   height: 52,
-                  decoration: BoxDecoration(color: catBg, borderRadius: BorderRadius.circular(14)),
+                  decoration: BoxDecoration(
+                    color: catBg,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                   child: Icon(catIcon, color: catColor, size: 26),
                 ),
                 const SizedBox(width: 12),
@@ -463,7 +933,11 @@ class _NearbyItemTile extends StatelessWidget {
                         item.name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5, color: _kText),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14.5,
+                          color: _kText,
+                        ),
                       ),
                       const SizedBox(height: 5),
                       Wrap(
@@ -471,34 +945,59 @@ class _NearbyItemTile extends StatelessWidget {
                         runSpacing: 4,
                         children: [
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                            decoration: BoxDecoration(color: catBg, borderRadius: BorderRadius.circular(6)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: catBg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
                             child: Text(
                               catLabel,
-                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: catColor),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: catColor,
+                              ),
                             ),
                           ),
                           if (item.isLive)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 3,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFE8F5E9),
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: const Text(
                                 'LIVE',
-                                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Color(0xFF2E7D32)),
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF2E7D32),
+                                ),
                               ),
                             ),
                           if (item.rating > 0)
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.star_rounded, size: 13, color: Colors.amber),
+                                const Icon(
+                                  Icons.star_rounded,
+                                  size: 13,
+                                  color: Colors.amber,
+                                ),
                                 const SizedBox(width: 2),
                                 Text(
                                   item.rating.toStringAsFixed(1),
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kTextMid),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: _kTextMid,
+                                  ),
                                 ),
                               ],
                             ),
@@ -508,14 +1007,21 @@ class _NearbyItemTile extends StatelessWidget {
                         const SizedBox(height: 5),
                         Row(
                           children: [
-                            const Icon(Icons.location_on_outlined, size: 12, color: _kTextLight),
+                            const Icon(
+                              Icons.location_on_outlined,
+                              size: 12,
+                              color: _kTextLight,
+                            ),
                             const SizedBox(width: 3),
                             Expanded(
                               child: Text(
                                 item.address,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 11.5, color: _kTextLight),
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  color: _kTextLight,
+                                ),
                               ),
                             ),
                           ],
@@ -528,7 +1034,9 @@ class _NearbyItemTile extends StatelessWidget {
             ),
           ),
           Container(
-            decoration: const BoxDecoration(border: Border(top: BorderSide(color: _kBorder))),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: _kBorder)),
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -546,14 +1054,19 @@ class _NearbyItemTile extends StatelessWidget {
                   child: _ActionBtn(
                     icon: item.category == 'hotel'
                         ? Icons.bed_rounded
-                        : item.category == 'restaurant' || item.category == 'cafe'
+                        : item.category == 'restaurant' ||
+                                item.category == 'cafe'
                             ? Icons.directions_rounded
                             : Icons.confirmation_number_rounded,
-                    label: item.category == 'hotel'
-                        ? 'Book Room'
-                        : item.category == 'restaurant' || item.category == 'cafe'
-                            ? 'Directions'
-                            : 'Book Tour',
+                    label: item.bookingUrl?.trim().isNotEmpty == true ||
+                            item.website?.trim().isNotEmpty == true
+                        ? 'Open Link'
+                        : item.category == 'hotel'
+                            ? 'Book Room'
+                            : item.category == 'restaurant' ||
+                                    item.category == 'cafe'
+                                ? 'Directions'
+                                : 'Book Tour',
                     color: _kBrown,
                     bg: _kBrownLight,
                     onTap: () => _book(context),
@@ -609,7 +1122,11 @@ class _ActionBtn extends StatelessWidget {
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: color),
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
                 ),
               ),
             ],
@@ -620,25 +1137,34 @@ class _ActionBtn extends StatelessWidget {
   }
 }
 
+
 // ════════════════════════════════════════════════════════════════
-//  BOOKING SECTION
+//  BOOKING SECTION — original premium design
 // ════════════════════════════════════════════════════════════════
 class _PremiumBookingSection extends StatelessWidget {
   final Landmark place;
   const _PremiumBookingSection({required this.place});
 
   String get _encodedName => Uri.encodeComponent(place.name);
-  String get _encodedCity => Uri.encodeComponent(place.city.isNotEmpty ? place.city : 'Egypt');
-  String get _encodedQuery => Uri.encodeComponent('${place.name} ${place.city} Egypt');
+  String get _encodedCity =>
+      Uri.encodeComponent(place.city.isNotEmpty ? place.city : 'Egypt');
+  String get _encodedQuery =>
+      Uri.encodeComponent('${place.name} ${place.city} Egypt');
 
   bool get _isHotel {
     final cat = place.category.toLowerCase();
-    return cat.contains('hotel') || cat.contains('resort');
+    return cat.contains('hotel') ||
+        cat.contains('resort') ||
+        cat.contains('hostel') ||
+        cat.contains('motel');
   }
 
   bool get _isDining {
     final cat = place.category.toLowerCase();
-    return cat.contains('restaurant') || cat.contains('cafe');
+    return cat.contains('restaurant') ||
+        cat.contains('cafe') ||
+        cat.contains('coffee') ||
+        cat.contains('food');
   }
 
   @override
@@ -659,9 +1185,15 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFE3F2FD),
             iconColor: const Color(0xFF1565C0),
             priceHint: 'From \$45/night',
-            features: const ['Free cancellation', 'No prepayment needed', 'Instant confirmation'],
+            features: const [
+              'Free cancellation',
+              'No prepayment needed',
+              'Instant confirmation',
+            ],
             onTap: () => _launchSafely(
-              Uri.parse('https://www.booking.com/searchresults.html?ss=$_encodedName'),
+              Uri.parse(
+                'https://www.booking.com/searchresults.html?ss=$_encodedName',
+              ),
               context: context,
             ),
           ),
@@ -675,7 +1207,11 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFFFF3E0),
             iconColor: const Color(0xFFE65100),
             priceHint: 'Special discounts',
-            features: const ['Secret deals', 'Last minute offers', 'Member prices'],
+            features: const [
+              'Secret deals',
+              'Last minute offers',
+              'Member prices',
+            ],
             onTap: () => _launchSafely(
               Uri.parse('https://www.agoda.com/search?q=$_encodedQuery'),
               context: context,
@@ -691,7 +1227,11 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFF3F3F3),
             iconColor: Colors.black87,
             priceHint: 'Live fare estimate',
-            features: const ['Open Uber app', 'Set destination automatically', 'Order in seconds'],
+            features: const [
+              'Open Uber app',
+              'Set destination automatically',
+              'Order in seconds',
+            ],
             onTap: () => _launchUberRide(place, context: context),
           ),
         ],
@@ -708,11 +1248,19 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFE3F2FD),
             iconColor: const Color(0xFF1565C0),
             priceHint: 'Free navigation',
-            features: const ['Turn-by-turn directions', 'View photos', 'Read reviews'],
+            features: const [
+              'Turn-by-turn directions',
+              'View photos',
+              'Read reviews',
+            ],
             onTap: () {
               final Uri uri = place.lat != 0 && place.lng != 0
-                  ? Uri.parse('https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}')
-                  : Uri.parse('https://www.google.com/maps/search/?api=1&query=$_encodedQuery');
+                  ? Uri.parse(
+                      'https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}',
+                    )
+                  : Uri.parse(
+                      'https://www.google.com/maps/search/?api=1&query=$_encodedQuery',
+                    );
               _launchSafely(uri, context: context);
             },
           ),
@@ -726,7 +1274,11 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFE8F5E9),
             iconColor: const Color(0xFF2E7D32),
             priceHint: 'See all reviews',
-            features: const ['Traveler reviews', 'Photos', 'Menu info'],
+            features: const [
+              'Traveler reviews',
+              'Photos',
+              'Menu info',
+            ],
             onTap: () => _launchSafely(
               Uri.parse('https://www.tripadvisor.com/Search?q=$_encodedQuery'),
               context: context,
@@ -742,7 +1294,11 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFF3F3F3),
             iconColor: Colors.black87,
             priceHint: 'Live fare estimate',
-            features: const ['Open Uber app', 'Set destination automatically', 'Order in seconds'],
+            features: const [
+              'Open Uber app',
+              'Set destination automatically',
+              'Order in seconds',
+            ],
             onTap: () => _launchUberRide(place, context: context),
           ),
         ],
@@ -759,9 +1315,15 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFE8F5E9),
             iconColor: const Color(0xFF2E7D32),
             priceHint: 'From \$15',
-            features: const ['Skip the line', 'Expert guides', 'Free cancellation'],
+            features: const [
+              'Skip the line',
+              'Expert guides',
+              'Free cancellation',
+            ],
             onTap: () => _launchSafely(
-              Uri.parse('https://www.viator.com/searchResults/all?text=$_encodedName+$_encodedCity'),
+              Uri.parse(
+                'https://www.viator.com/searchResults/all?text=$_encodedName+$_encodedCity',
+              ),
               context: context,
             ),
           ),
@@ -775,7 +1337,11 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFFFF3E0),
             iconColor: const Color(0xFFE65100),
             priceHint: 'Compare tours',
-            features: const ['Instant confirmation', 'Mobile ticket', 'Best guides'],
+            features: const [
+              'Instant confirmation',
+              'Mobile ticket',
+              'Best guides',
+            ],
             onTap: () => _launchSafely(
               Uri.parse('https://www.getyourguide.com/s/?q=$_encodedName'),
               context: context,
@@ -791,14 +1357,18 @@ class _PremiumBookingSection extends StatelessWidget {
             iconBg: const Color(0xFFF3F3F3),
             iconColor: Colors.black87,
             priceHint: 'Live fare estimate',
-            features: const ['Open Uber app', 'Set destination automatically', 'Order in seconds'],
+            features: const [
+              'Open Uber app',
+              'Set destination automatically',
+              'Order in seconds',
+            ],
             onTap: () => _launchUberRide(place, context: context),
           ),
         ],
       );
 }
 
-class _BookingProviderCard extends StatelessWidget {
+class _BookingProviderCard extends StatefulWidget {
   final String providerName;
   final String tagline;
   final String badge;
@@ -824,111 +1394,191 @@ class _BookingProviderCard extends StatelessWidget {
   });
 
   @override
+  State<_BookingProviderCard> createState() => _BookingProviderCardState();
+}
+
+class _BookingProviderCardState extends State<_BookingProviderCard> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        onTap: onTap,
+    final bgColor = _pressed ? _kBrownLight : _kCard;
+    final borderColor = _pressed ? _kBrownMed.withOpacity(0.55) : _kBorder;
+    final shadowOpacity = _pressed ? 0.08 : 0.025;
+
+    return AnimatedScale(
+      scale: _pressed ? 0.985 : 1.0,
+      duration: const Duration(milliseconds: 110),
+      curve: Curves.easeOut,
+      child: Material(
+        color: bgColor,
         borderRadius: BorderRadius.circular(18),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: _kBorder),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(color: iconBg, borderRadius: BorderRadius.circular(14)),
-                    child: Icon(icon, color: iconColor, size: 24),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: widget.onTap,
+          onHighlightChanged: _setPressed,
+          splashColor: _kBrownMed.withOpacity(0.16),
+          highlightColor: _kBrownMed.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(18),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOut,
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: borderColor),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(shadowOpacity),
+                  blurRadius: _pressed ? 14 : 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: _pressed
+                        ? widget.iconColor.withOpacity(0.16)
+                        : widget.iconBg,
+                    borderRadius: BorderRadius.circular(15),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Wrap(
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: [
-                            Text(
-                              providerName,
-                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: _kText),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: badgeColor.withOpacity(0.10),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: badgeColor.withOpacity(0.25)),
-                              ),
-                              child: Text(
-                                badge,
-                                style: TextStyle(color: badgeColor, fontSize: 9, fontWeight: FontWeight.w800),
+                  child: Icon(widget.icon, color: widget.iconColor, size: 25),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              widget.providerName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w800,
+                                color: _pressed ? _kBrown : _kText,
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Text(tagline, style: const TextStyle(fontSize: 12.5, color: _kTextLight)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: features
-                    .map(
-                      (f) => Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF8F4EF),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.check_circle_outline_rounded, size: 11, color: _kBrownMed),
-                            const SizedBox(width: 4),
-                            Text(
-                              f,
-                              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600, color: _kTextMid),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
                             ),
-                          ],
+                            decoration: BoxDecoration(
+                              color: widget.badgeColor.withOpacity(0.10),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              widget.badge,
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                                color: widget.badgeColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        widget.tagline,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12.2,
+                          height: 1.35,
+                          color: _kTextMid,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    )
-                    .toList(),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(color: _kBrown, borderRadius: BorderRadius.circular(12)),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'Book Now',
-                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
-                    ),
-                    SizedBox(width: 6),
-                    Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 12),
-                  ],
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: widget.features
+                            .map(
+                              (f) => Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _pressed
+                                      ? Colors.white.withOpacity(0.75)
+                                      : _kBrownLight,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  f,
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: _kTextMid,
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.payments_outlined,
+                            size: 15,
+                            color: _kBrownMed,
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              widget.priceHint,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: _kBrown,
+                              ),
+                            ),
+                          ),
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 140),
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: _pressed
+                                  ? _kBrown.withOpacity(0.12)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.open_in_new_rounded,
+                              size: 17,
+                              color: _kBrownMed,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

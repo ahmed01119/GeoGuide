@@ -1,16 +1,18 @@
 // ============================================================
 //  services/nearby-service.dart
-//  FINAL FULL VERSION — preserved API + Overpass fixes
+//  MULTI-SOURCE FREE VERSION — Firebase-first helper + free APIs
 //
-//  Fixes:
-//  - Keeps full NearbyPlace model and all methods.
-//  - Uses meaningful User-Agent to avoid 429.
-//  - Sends Overpass request as form-urlencoded.
-//  - Uses fallback Overpass endpoints.
-//  - Uses progressive radius to avoid heavy requests.
-//  - Uses out center; and supports node/way/relation.
-//  - Category-aware search radius to avoid Cairo overload/429.
-//- Strict cafe matching so restaurant noise does not appear as cafes.
+//  Sources order used by the UI:
+//  1) Stored nearby places from Landmark/Firebase
+//  2) Free Nominatim text search
+//  3) Free Overpass live search as last source only
+//
+//  Notes:
+//  - No Google Places API / no billing.
+//  - Includes outing places: parks, gardens, malls, cinemas, theatres, zoos,
+//    aquariums, theme parks, sports/leisure places.
+//  - Safe timeouts + cooldown to avoid long UI blocking.
+//  - Strong dedupe by normalized name + category.
 // ============================================================
 
 import 'dart:convert';
@@ -91,6 +93,114 @@ class NearbyPlace {
     );
   }
 
+  factory NearbyPlace.fromOsm({
+    required Map<String, dynamic> element,
+    required double originLat,
+    required double originLng,
+  }) {
+    final tags = Map<String, dynamic>.from(element['tags'] as Map? ?? {});
+
+    double lat = 0;
+    double lng = 0;
+
+    if (element['lat'] != null && element['lon'] != null) {
+      lat = ((element['lat'] ?? 0) as num).toDouble();
+      lng = ((element['lon'] ?? 0) as num).toDouble();
+    } else if (element['center'] is Map) {
+      final center = Map<String, dynamic>.from(element['center'] as Map);
+      lat = ((center['lat'] ?? 0) as num).toDouble();
+      lng = ((center['lon'] ?? 0) as num).toDouble();
+    }
+
+    final category = _detectCategory(tags);
+    final address = _buildAddress(tags);
+    final website = _extractWebsite(tags);
+    final type = (element['type'] ?? 'osm').toString();
+    final osmId = (element['id'] ?? '').toString();
+
+    return NearbyPlace(
+      placeId: '${type}_$osmId',
+      name: (tags['name:en'] ?? tags['name'] ?? '').toString().trim(),
+      address: address,
+      lat: lat,
+      lng: lng,
+      distanceKm: _distanceKm(originLat, originLng, lat, lng),
+      rating: 0,
+      userRatingsTotal: 0,
+      priceLevel: '',
+      isOpenNow: false,
+      hasOpeningHours: tags['opening_hours'] != null,
+      imageUrl: '',
+      category: category,
+      types: tags.entries.map((e) => '${e.key}:${e.value}').toList(),
+      mapsUrl: _buildMapsUrl(lat, lng),
+      bookingUrl: _buildBookingUrl(category: category, website: website),
+      wikipediaUrl: _extractWikipediaUrl(tags),
+      phone: _extractPhone(tags),
+      website: website,
+      fetchedAt: DateTime.now(),
+    );
+  }
+
+  factory NearbyPlace.fromNominatim({
+    required Map<String, dynamic> item,
+    required double originLat,
+    required double originLng,
+    required String category,
+  }) {
+    final lat = double.tryParse((item['lat'] ?? '0').toString()) ?? 0;
+    final lng = double.tryParse((item['lon'] ?? '0').toString()) ?? 0;
+    final name = _extractNominatimName(item);
+    final address = (item['display_name'] ?? '').toString();
+
+    final osmType = (item['osm_type'] ?? 'nominatim').toString();
+    final osmId = (item['osm_id'] ?? '').toString();
+
+    return NearbyPlace(
+      placeId: 'nominatim_${osmType}_$osmId',
+      name: name,
+      address: address,
+      lat: lat,
+      lng: lng,
+      distanceKm: _distanceKm(originLat, originLng, lat, lng),
+      rating: 0,
+      userRatingsTotal: 0,
+      priceLevel: '',
+      isOpenNow: false,
+      hasOpeningHours: false,
+      imageUrl: '',
+      category: _normalizeCategory(category),
+      types: [
+        'source:nominatim',
+        'class:${item['class'] ?? ''}',
+        'type:${item['type'] ?? ''}',
+      ],
+      mapsUrl: _buildMapsUrl(lat, lng),
+      bookingUrl: null,
+      wikipediaUrl: null,
+      phone: null,
+      website: null,
+      fetchedAt: DateTime.now(),
+    );
+  }
+
+  static String _extractNominatimName(Map<String, dynamic> item) {
+    final namedetails =
+        Map<String, dynamic>.from(item['namedetails'] as Map? ?? {});
+    final direct = (namedetails['name:en'] ??
+            namedetails['name'] ??
+            item['name'] ??
+            '')
+        .toString()
+        .trim();
+
+    if (direct.isNotEmpty) return direct;
+
+    final display = (item['display_name'] ?? '').toString().trim();
+    if (display.isEmpty) return '';
+    return display.split(',').first.trim();
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'placeId': placeId,
@@ -114,45 +224,6 @@ class NearbyPlace {
       'website': website,
       'fetchedAt': fetchedAt?.toIso8601String(),
     };
-  }
-
-  factory NearbyPlace.fromOsm({
-    required Map<String, dynamic> element,
-    required double originLat,
-    required double originLng,
-  }) {
-    final tags = Map<String, dynamic>.from(element['tags'] as Map? ?? {});
-    final lat = ((element['lat'] ?? 0) as num).toDouble();
-    final lng = ((element['lon'] ?? 0) as num).toDouble();
-
-    final category = _detectCategory(tags);
-    final address = _buildAddress(tags);
-    final website = _extractWebsite(tags);
-
-final type = (element['type'] ?? 'osm').toString();
-final osmId = (element['id'] ?? '').toString();
-    return NearbyPlace(
-      placeId: '${type}_$osmId',
-      name: (tags['name'] ?? tags['name:en'] ?? '').toString().trim(),
-      address: address,
-      lat: lat,
-      lng: lng,
-      distanceKm: _distanceKm(originLat, originLng, lat, lng),
-      rating: 0,
-      userRatingsTotal: 0,
-      priceLevel: '',
-      isOpenNow: false,
-      hasOpeningHours: tags['opening_hours'] != null,
-      imageUrl: '',
-      category: category,
-      types: tags.entries.map((e) => '${e.key}:${e.value}').toList(),
-      mapsUrl: _buildMapsUrl(lat, lng),
-      bookingUrl: _buildBookingUrl(category: category, website: website),
-      wikipediaUrl: _extractWikipediaUrl(tags),
-      phone: _extractPhone(tags),
-      website: website,
-      fetchedAt: DateTime.now(),
-    );
   }
 
   NearbyPlace copyWith({
@@ -207,27 +278,43 @@ final osmId = (element['id'] ?? '').toString();
     if (cat.contains('hotel') ||
         cat.contains('hostel') ||
         cat.contains('guest_house') ||
+        cat.contains('guest house') ||
         cat.contains('motel') ||
         cat.contains('resort') ||
         cat.contains('apartment')) {
       return 'hotel';
     }
 
-    if (cat.contains('restaurant') ||
-        cat.contains('fast_food') ||
-        cat.contains('food_court')) {
-      return 'restaurant';
+    if (cat.contains('cafe') ||
+        cat.contains('coffee') ||
+        cat.contains('bakery') ||
+        cat.contains('pastry') ||
+        cat.contains('dessert') ||
+        cat.contains('ice_cream') ||
+        cat.contains('ice cream')) {
+      return 'cafe';
     }
 
-    if (cat.contains('cafe') || cat.contains('coffee')) return 'cafe';
+    if (cat.contains('restaurant') ||
+        cat.contains('fast_food') ||
+        cat.contains('fast food') ||
+        cat.contains('food_court') ||
+        cat.contains('food court')) {
+      return 'restaurant';
+    }
 
     if (cat.contains('outing') ||
         cat.contains('park') ||
         cat.contains('garden') ||
         cat.contains('mall') ||
         cat.contains('cinema') ||
+        cat.contains('theatre') ||
         cat.contains('beach') ||
-        cat.contains('leisure')) {
+        cat.contains('leisure') ||
+        cat.contains('zoo') ||
+        cat.contains('aquarium') ||
+        cat.contains('theme_park') ||
+        cat.contains('theme park')) {
       return 'outing';
     }
 
@@ -254,12 +341,11 @@ final osmId = (element['id'] ?? '').toString();
         tourism == 'hostel' ||
         tourism == 'guest_house' ||
         tourism == 'motel' ||
-        tourism == 'apartment') {
+        tourism == 'apartment' ||
+        tourism == 'resort') {
       return 'hotel';
     }
 
-    // Keep cafe detection before restaurant because many dessert/coffee places
-    // are tagged as shops, not only amenity=cafe.
     if (amenity == 'cafe' ||
         amenity == 'coffee_shop' ||
         amenity == 'ice_cream' ||
@@ -288,8 +374,13 @@ final osmId = (element['id'] ?? '').toString();
         amenity == 'theatre' ||
         amenity == 'arts_centre' ||
         amenity == 'community_centre' ||
+        amenity == 'fountain' ||
         shop == 'mall' ||
-        shop == 'department_store') {
+        shop == 'department_store' ||
+        tourism == 'theme_park' ||
+        tourism == 'zoo' ||
+        tourism == 'aquarium' ||
+        tourism == 'picnic_site') {
       return 'outing';
     }
 
@@ -368,6 +459,8 @@ final osmId = (element['id'] ?? '').toString();
   }
 
   static double _distanceKm(double lat1, double lng1, double lat2, double lng2) {
+    if (lat1 == 0 || lng1 == 0 || lat2 == 0 || lng2 == 0) return 9999;
+
     const earthRadiusKm = 6371.0;
 
     final dLat = _degToRad(lat2 - lat1);
@@ -403,8 +496,13 @@ class NearbyService {
 
   final http.Client _client;
 
-  // Session cache prevents repeated Overpass calls for the same location/category.
   static final Map<String, List<NearbyPlace>> _nearbyMemoryCache = {};
+  static DateTime? _overpassCooldownUntil;
+  static DateTime? _nominatimCooldownUntil;
+
+  static const Duration _endpointTimeout = Duration(seconds: 10);
+  static const Duration _nominatimTimeout = Duration(seconds: 10);
+  static const Duration _cooldownDuration = Duration(seconds: 45);
 
   static const List<String> _overpassEndpoints = [
     'https://overpass.kumi.systems/api/interpreter',
@@ -419,18 +517,83 @@ class NearbyService {
 
   DateTime? getLatestFetchedAt(List<NearbyPlace> places) {
     DateTime? latest;
+
     for (final place in places) {
-      if (place.fetchedAt == null) continue;
-      if (latest == null || place.fetchedAt!.isAfter(latest)) {
-        latest = place.fetchedAt!;
+      final fetchedAt = place.fetchedAt;
+      if (fetchedAt == null) continue;
+
+      if (latest == null || fetchedAt.isAfter(latest)) {
+        latest = fetchedAt;
       }
     }
+
     return latest;
+  }
+
+  Future<NearbyUpdateResult> getNearbyWithAutoRefresh({
+    required double lat,
+    required double lng,
+    required String cityName,
+    List<NearbyPlace> existingPlaces = const [],
+    List<String> categories = const [
+      'hotel',
+      'restaurant',
+      'cafe',
+      'tourist',
+      'outing',
+    ],
+    int limit = 24,
+    DateTime? lastFetchedAt,
+    bool forceRefresh = false,
+  }) async {
+    final latest = lastFetchedAt ?? getLatestFetchedAt(existingPlaces);
+    final needsRefresh = forceRefresh || shouldRefresh(latest);
+
+    final existingSorted = [...existingPlaces]
+      ..sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
+
+    if (!needsRefresh && existingSorted.isNotEmpty) {
+      return NearbyUpdateResult(
+        places: existingSorted.take(limit).toList(),
+        didRefresh: false,
+        refreshedAt: latest ?? DateTime.now(),
+      );
+    }
+
+    final fresh = await getNearbyForCoordinates(
+      lat: lat,
+      lng: lng,
+      cityName: cityName,
+      categories: categories,
+      limit: math.max(limit, 32),
+      forceRefresh: forceRefresh,
+    );
+
+    if (fresh.isEmpty && existingSorted.isNotEmpty) {
+      return NearbyUpdateResult(
+        places: existingSorted.take(limit).toList(),
+        didRefresh: false,
+        refreshedAt: latest ?? DateTime.now(),
+      );
+    }
+
+    final merged = mergeNearbyPlaces(
+      oldPlaces: existingSorted,
+      newPlaces: fresh,
+      limit: limit,
+    );
+
+    return NearbyUpdateResult(
+      places: merged,
+      didRefresh: fresh.isNotEmpty,
+      refreshedAt: fresh.isNotEmpty ? DateTime.now() : (latest ?? DateTime.now()),
+    );
   }
 
   Future<List<NearbyPlace>> getNearbyForCoordinates({
     required double lat,
     required double lng,
+    required String cityName,
     List<String> categories = const [
       'hotel',
       'restaurant',
@@ -439,26 +602,260 @@ class NearbyService {
       'outing',
     ],
     int limit = 36,
+    bool forceRefresh = false,
   }) async {
     if (lat == 0 || lng == 0) return [];
 
     final normalizedCategories = categories
         .map((e) => NearbyPlace._normalizeCategory(e))
         .toSet()
-        .toList();
+        .toList()
+      ..sort();
 
-    final cacheKey = '${lat.toStringAsFixed(4)}|${lng.toStringAsFixed(4)}|${normalizedCategories.join(',')}|$limit';
+    final cacheKey =
+        '${lat.toStringAsFixed(4)}|${lng.toStringAsFixed(4)}|${_normalizeText(cityName)}|${normalizedCategories.join(',')}|$limit';
+
     final cachedNearby = _nearbyMemoryCache[cacheKey];
-    if (cachedNearby != null && cachedNearby.isNotEmpty) {
+    if (!forceRefresh && cachedNearby != null && cachedNearby.isNotEmpty) {
       return cachedNearby.take(limit).toList();
     }
 
-    // Category-aware progressive widening.
-    // Cairo/Giza cafes can return thousands of elements, so cafes use smaller
-    // radii to avoid Overpass 429/timeouts and noisy results.
-    final onlyCafe = normalizedCategories.length == 1 &&
-        normalizedCategories.contains('cafe');
-    final onlyFood = normalizedCategories.every(
+    final collected = <NearbyPlace>[];
+    final seen = <String>{};
+
+    Future<void> addAll(List<NearbyPlace> places) async {
+      for (final place in places) {
+        if (place.name.trim().isEmpty) continue;
+        if (place.distanceKm > 25.0) continue;
+        final key = _dedupeKey(place);
+        if (seen.add(key)) collected.add(place);
+      }
+    }
+
+    // Free text search first. It is lighter than wide Overpass scans and helps
+    // with outing places such as malls, parks, cinemas, zoos.
+    final textResults = await _fetchFromNominatim(
+      lat: lat,
+      lng: lng,
+      cityName: cityName,
+      categories: normalizedCategories,
+      limit: math.max(limit, 32),
+    );
+    await addAll(textResults);
+
+    // Overpass is last live source only. It can timeout in busy areas.
+    if (collected.length < math.min(limit, 18)) {
+      final overpassResults = await _fetchFromOverpassProgressive(
+        lat: lat,
+        lng: lng,
+        categories: normalizedCategories,
+        limit: math.max(limit, 32),
+      );
+      await addAll(overpassResults);
+    }
+
+    collected.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
+
+    final finalNearby = collected.take(limit).toList();
+
+    if (finalNearby.isNotEmpty) {
+      _nearbyMemoryCache[cacheKey] = finalNearby;
+    }
+
+    return finalNearby;
+  }
+
+  Future<List<NearbyPlace>> _fetchFromNominatim({
+    required double lat,
+    required double lng,
+    required String cityName,
+    required List<String> categories,
+    required int limit,
+  }) async {
+    if (_isNominatimCoolingDown) {
+      print('[Nearby] Nominatim cooling down; skip text search.');
+      return const [];
+    }
+
+    final queries = _buildNominatimQueries(cityName, categories);
+    final collected = <NearbyPlace>[];
+    final seen = <String>{};
+
+    for (final q in queries) {
+      if (collected.length >= limit) break;
+
+      try {
+        final uri = Uri.https(
+          'nominatim.openstreetmap.org',
+          '/search',
+          {
+            'q': q,
+            'format': 'jsonv2',
+            'addressdetails': '1',
+            'namedetails': '1',
+            'limit': '8',
+            'countrycodes': 'eg',
+            'accept-language': 'en',
+          },
+        );
+
+        final response = await _client.get(
+          uri,
+          headers: const {
+            'Accept': 'application/json',
+            'User-Agent':
+                'GeoGuideApp/1.0 (student-project; contact: geoguide@example.com)',
+          },
+        ).timeout(_nominatimTimeout);
+
+        print('[Nearby] nominatim status=${response.statusCode} query=$q');
+
+        if (response.statusCode == 429 || response.statusCode == 503) {
+          _startNominatimCooldown();
+          break;
+        }
+
+        if (response.statusCode != 200) continue;
+
+        final decoded = jsonDecode(response.body);
+        if (decoded is! List) continue;
+
+        final category = _categoryFromQuery(q, categories);
+
+        for (final raw in decoded) {
+          if (raw is! Map) continue;
+          final item = Map<String, dynamic>.from(raw);
+
+          final place = NearbyPlace.fromNominatim(
+            item: item,
+            originLat: lat,
+            originLng: lng,
+            category: category,
+          );
+
+          if (place.name.trim().isEmpty) continue;
+          if (place.lat == 0 || place.lng == 0) continue;
+          if (place.distanceKm > 25.0) continue;
+
+          final searchableText = [
+            place.name,
+            place.address,
+            place.category,
+            ...place.types,
+          ].join(' ').toLowerCase();
+
+          if (!_acceptByRequestedCategory(
+            wantedCategories: categories.toSet(),
+            placeCategory: place.category,
+            searchableText: searchableText,
+          )) {
+            continue;
+          }
+
+          final key = _dedupeKey(place);
+          if (seen.add(key)) collected.add(place);
+        }
+      } catch (e) {
+        print('[Nearby] nominatim failed query=$q error=$e');
+        // Do not stop all Nominatim text search after one slow query.
+        // Try the next text query, then Overpass will still run after this.
+        continue;
+      }
+    }
+
+    collected.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
+    print('[Nearby] nominatim total=${collected.length}');
+    return collected.take(limit).toList();
+  }
+
+  List<String> _buildNominatimQueries(
+    String cityName,
+    List<String> categories,
+  ) {
+    final city = cityName.trim().isEmpty ? 'Egypt' : '$cityName Egypt';
+    final queries = <String>[];
+
+    if (categories.contains('tourist')) {
+      queries.addAll([
+        'tourist attractions in $city',
+        'museums in $city',
+        'historic places in $city',
+      ]);
+    }
+
+    if (categories.contains('outing')) {
+      queries.addAll([
+        'parks in $city',
+        'gardens in $city',
+        'malls in $city',
+        'cinemas in $city',
+        'zoos in $city',
+        'aquariums in $city',
+        'theme parks in $city',
+        'outing places in $city',
+      ]);
+    }
+
+    if (categories.contains('hotel')) {
+      queries.add('hotels in $city');
+    }
+
+    if (categories.contains('restaurant')) {
+      queries.add('restaurants in $city');
+    }
+
+    if (categories.contains('cafe')) {
+      queries.addAll([
+        'cafes in $city',
+        'coffee shops in $city',
+      ]);
+    }
+
+    return queries.toSet().toList();
+  }
+
+  String _categoryFromQuery(String query, List<String> fallbackCategories) {
+    final q = query.toLowerCase();
+
+    if (q.contains('hotel')) return 'hotel';
+    if (q.contains('restaurant')) return 'restaurant';
+    if (q.contains('cafe') || q.contains('coffee')) return 'cafe';
+
+    if (q.contains('park') ||
+        q.contains('garden') ||
+        q.contains('mall') ||
+        q.contains('cinema') ||
+        q.contains('zoo') ||
+        q.contains('aquarium') ||
+        q.contains('theme') ||
+        q.contains('outing')) {
+      return 'outing';
+    }
+
+    if (q.contains('museum') ||
+        q.contains('historic') ||
+        q.contains('tourist') ||
+        q.contains('attraction')) {
+      return 'tourist';
+    }
+
+    return fallbackCategories.isNotEmpty ? fallbackCategories.first : 'tourist';
+  }
+
+  Future<List<NearbyPlace>> _fetchFromOverpassProgressive({
+    required double lat,
+    required double lng,
+    required List<String> categories,
+    required int limit,
+  }) async {
+    if (_isOverpassCoolingDown) {
+      print('[Nearby] Overpass cooling down; skip live request.');
+      return const [];
+    }
+
+    final onlyCafe = categories.length == 1 && categories.contains('cafe');
+
+    final onlyFood = categories.every(
       (c) => c == 'cafe' || c == 'restaurant',
     );
 
@@ -470,34 +867,44 @@ class NearbyService {
 
     final collected = <NearbyPlace>[];
     final seen = <String>{};
+    int consecutiveFailures = 0;
 
     for (final radius in radiusOptions) {
       final fresh = await _fetchFromOverpass(
         lat: lat,
         lng: lng,
         radiusMeters: radius,
-        categories: normalizedCategories,
-        limit: math.max(limit, 80),
+        categories: categories,
+        limit: math.max(limit, 40),
       );
 
-      print('[Nearby] radius=$radius found=${fresh.length} totalBefore=${collected.length}');
+      print(
+        '[Nearby] radius=$radius found=${fresh.length} totalBefore=${collected.length}',
+      );
+
+      if (fresh.isEmpty) {
+        consecutiveFailures++;
+      } else {
+        consecutiveFailures = 0;
+      }
 
       for (final place in fresh) {
-        if (place.distanceKm > 30.0) continue;
+        if (place.distanceKm > 20.0) continue;
         final key = _dedupeKey(place);
         if (seen.add(key)) collected.add(place);
       }
 
       print('[Nearby] radius=$radius totalAfter=${collected.length}');
 
-      // Stop only after a meaningful radius, not from the first 3km scan.
-      if (collected.length >= limit && radius >= 12000) break;
+      if (collected.length >= limit) break;
+    }
+
+    if (collected.isEmpty) {
+      _startOverpassCooldown();
     }
 
     collected.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
-    final finalNearby = collected.take(limit).toList();
-    if (finalNearby.isNotEmpty) _nearbyMemoryCache[cacheKey] = finalNearby;
-    return finalNearby;
+    return collected.take(limit).toList();
   }
 
   Future<List<NearbyPlace>> _fetchFromOverpass({
@@ -507,139 +914,28 @@ class NearbyService {
     required List<String> categories,
     required int limit,
   }) async {
-    final queries = <String>[];
+    if (_isOverpassCoolingDown) return const [];
 
-    if (categories.contains('hotel')) {
-      queries.add(
-        'node["tourism"~"hotel|hostel|guest_house|motel|apartment"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["tourism"~"hotel|hostel|guest_house|motel|apartment"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["tourism"~"hotel|hostel|guest_house|motel|apartment"](around:$radiusMeters,$lat,$lng);',
-      );
-    }
+    final queries = _buildOverpassQueries(
+      lat: lat,
+      lng: lng,
+      radiusMeters: radiusMeters,
+      categories: categories,
+    );
 
-    if (categories.contains('restaurant')) {
-      queries.add(
-        'node["amenity"~"restaurant|fast_food|food_court"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["amenity"~"restaurant|fast_food|food_court"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["amenity"~"restaurant|fast_food|food_court"](around:$radiusMeters,$lat,$lng);',
-      );
-    }
-
-    if (categories.contains('cafe')) {
-      // Keep cafe queries strict. Do NOT include restaurant/fast_food here,
-      // otherwise cafe search will show many restaurants with names that do
-      // not look like cafes.
-      queries.add(
-        'node["amenity"~"cafe|ice_cream"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["amenity"~"cafe|ice_cream"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["amenity"~"cafe|ice_cream"](around:$radiusMeters,$lat,$lng);',
-      );
-
-      queries.add(
-        'node["shop"~"coffee|bakery|pastry|confectionery"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["shop"~"coffee|bakery|pastry|confectionery"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["shop"~"coffee|bakery|pastry|confectionery"](around:$radiusMeters,$lat,$lng);',
-      );
-
-      queries.add(
-        'node["cuisine"~"coffee|dessert|cake|pastry|ice_cream"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["cuisine"~"coffee|dessert|cake|pastry|ice_cream"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["cuisine"~"coffee|dessert|cake|pastry|ice_cream"](around:$radiusMeters,$lat,$lng);',
-      );
-    }
-
-
-    if (categories.contains('tourist')) {
-      queries.add(
-        'node["tourism"~"museum|attraction|viewpoint|gallery"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add('node["historic"](around:$radiusMeters,$lat,$lng);');
-
-      queries.add(
-        'way["tourism"~"museum|attraction|viewpoint|gallery"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add('way["historic"](around:$radiusMeters,$lat,$lng);');
-
-      queries.add(
-        'relation["tourism"~"museum|attraction|viewpoint|gallery"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add('relation["historic"](around:$radiusMeters,$lat,$lng);');
-    }
-
-    if (categories.contains('outing')) {
-      queries.add(
-        'node["leisure"~"park|garden|playground|beach_resort|sports_centre|fitness_centre"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["leisure"~"park|garden|playground|beach_resort|sports_centre|fitness_centre"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["leisure"~"park|garden|playground|beach_resort|sports_centre|fitness_centre"](around:$radiusMeters,$lat,$lng);',
-      );
-
-      queries.add(
-        'node["amenity"~"cinema|theatre|arts_centre|community_centre|fountain"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["amenity"~"cinema|theatre|arts_centre|community_centre|fountain"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["amenity"~"cinema|theatre|arts_centre|community_centre|fountain"](around:$radiusMeters,$lat,$lng);',
-      );
-
-      queries.add(
-        'node["shop"~"mall|department_store|supermarket"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["shop"~"mall|department_store|supermarket"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["shop"~"mall|department_store|supermarket"](around:$radiusMeters,$lat,$lng);',
-      );
-
-      queries.add(
-        'node["tourism"~"theme_park|zoo|aquarium|picnic_site"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'way["tourism"~"theme_park|zoo|aquarium|picnic_site"](around:$radiusMeters,$lat,$lng);',
-      );
-      queries.add(
-        'relation["tourism"~"theme_park|zoo|aquarium|picnic_site"](around:$radiusMeters,$lat,$lng);',
-      );
-    }
-
-    if (queries.isEmpty) return [];
+    if (queries.isEmpty) return const [];
 
     final body = '''
 [out:json][timeout:14];
 (
 ${queries.join('\n')}
 );
-out center;
+out center tags $limit;
 ''';
 
     final allResults = <NearbyPlace>[];
     final globalSeen = <String>{};
+    int endpointFailures = 0;
 
     for (final endpoint in _overpassEndpoints) {
       try {
@@ -655,14 +951,22 @@ out center;
               },
               body: {'data': body},
             )
-            .timeout(const Duration(seconds: 10));
+            .timeout(_endpointTimeout);
 
         print('[Nearby] endpoint=$endpoint status=${res.statusCode}');
 
-        if (res.statusCode != 200) continue;
+        if (res.statusCode == 429 || res.statusCode == 504) {
+          endpointFailures++;
+          continue;
+        }
+
+        if (res.statusCode != 200) {
+          endpointFailures++;
+          continue;
+        }
 
         final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final elements = (data['elements'] as List? ?? const []);
+        final elements = data['elements'] as List? ?? const [];
 
         print('[Nearby] endpoint=$endpoint raw elements=${elements.length}');
 
@@ -685,6 +989,7 @@ out center;
             final center = Map<String, dynamic>.from(element['center'] as Map);
             itemLat = ((center['lat'] ?? 0) as num).toDouble();
             itemLng = ((center['lon'] ?? 0) as num).toDouble();
+
             element['lat'] = itemLat;
             element['lon'] = itemLng;
           }
@@ -704,10 +1009,15 @@ out center;
             unnamedCount++;
             continue;
           }
-          if (place.distanceKm > 30.0) continue;
+
+          if (place.distanceKm > 20.0) {
+            rejectedCount++;
+            continue;
+          }
 
           final wantedCategories = categories.toSet();
           final placeCategory = NearbyPlace._normalizeCategory(place.category);
+
           final searchableText = [
             place.name,
             place.category,
@@ -742,78 +1052,158 @@ out center;
           'invalidLocation=$invalidLocationCount total=${allResults.length}',
         );
 
-        // One good endpoint is enough. Querying all mirrors after a successful
-        // response causes delays and 429s, especially in Cairo.
-        if (allResults.length >= limit) break;
+        if (allResults.isNotEmpty || elements.isNotEmpty) break;
       } catch (e) {
+        endpointFailures++;
         print('[Nearby] endpoint failed=$endpoint error=$e');
-        await Future.delayed(const Duration(milliseconds: 400));
       }
     }
 
+    if (allResults.isEmpty && endpointFailures >= _overpassEndpoints.length) {
+      print('[Nearby] all Overpass endpoints failed for this radius');
+    }
+
     allResults.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
+
     print('[Nearby] final from all endpoints=${allResults.length}');
+
     return allResults.take(limit).toList();
   }
 
-  Future<NearbyUpdateResult> getNearbyWithAutoRefresh({
+  List<String> _buildOverpassQueries({
     required double lat,
     required double lng,
-    List<NearbyPlace> existingPlaces = const [],
-    List<String> categories = const [
-      'hotel',
-      'restaurant',
-      'cafe',
-      'tourist',
-      'outing',
-    ],
+    required int radiusMeters,
+    required List<String> categories,
+  }) {
+    final queries = <String>[];
+
+    if (categories.contains('hotel')) {
+      queries.add(
+        'node["tourism"~"hotel|hostel|guest_house|motel|apartment|resort"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["tourism"~"hotel|hostel|guest_house|motel|apartment|resort"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["tourism"~"hotel|hostel|guest_house|motel|apartment|resort"](around:$radiusMeters,$lat,$lng);',
+      );
+    }
+
+    if (categories.contains('restaurant')) {
+      queries.add(
+        'node["amenity"~"restaurant|fast_food|food_court"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["amenity"~"restaurant|fast_food|food_court"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["amenity"~"restaurant|fast_food|food_court"](around:$radiusMeters,$lat,$lng);',
+      );
+    }
+
+    if (categories.contains('cafe')) {
+      queries.add(
+        'node["amenity"~"cafe|ice_cream"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["amenity"~"cafe|ice_cream"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["amenity"~"cafe|ice_cream"](around:$radiusMeters,$lat,$lng);',
+      );
+
+      queries.add(
+        'node["shop"~"coffee|bakery|pastry|confectionery"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["shop"~"coffee|bakery|pastry|confectionery"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["shop"~"coffee|bakery|pastry|confectionery"](around:$radiusMeters,$lat,$lng);',
+      );
+    }
+
+    if (categories.contains('tourist')) {
+      queries.add(
+        'node["tourism"~"museum|attraction|viewpoint|gallery"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["tourism"~"museum|attraction|viewpoint|gallery"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["tourism"~"museum|attraction|viewpoint|gallery"](around:$radiusMeters,$lat,$lng);',
+      );
+
+      queries.add('node["historic"](around:$radiusMeters,$lat,$lng);');
+      queries.add('way["historic"](around:$radiusMeters,$lat,$lng);');
+      queries.add('relation["historic"](around:$radiusMeters,$lat,$lng);');
+    }
+
+    if (categories.contains('outing')) {
+      queries.add(
+        'node["leisure"~"park|garden|playground|beach_resort|sports_centre|fitness_centre"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["leisure"~"park|garden|playground|beach_resort|sports_centre|fitness_centre"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["leisure"~"park|garden|playground|beach_resort|sports_centre|fitness_centre"](around:$radiusMeters,$lat,$lng);',
+      );
+
+      queries.add(
+        'node["amenity"~"cinema|theatre|arts_centre|community_centre|fountain"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["amenity"~"cinema|theatre|arts_centre|community_centre|fountain"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["amenity"~"cinema|theatre|arts_centre|community_centre|fountain"](around:$radiusMeters,$lat,$lng);',
+      );
+
+      queries.add(
+        'node["shop"~"mall|department_store"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["shop"~"mall|department_store"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["shop"~"mall|department_store"](around:$radiusMeters,$lat,$lng);',
+      );
+
+      queries.add(
+        'node["tourism"~"theme_park|zoo|aquarium|picnic_site"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'way["tourism"~"theme_park|zoo|aquarium|picnic_site"](around:$radiusMeters,$lat,$lng);',
+      );
+      queries.add(
+        'relation["tourism"~"theme_park|zoo|aquarium|picnic_site"](around:$radiusMeters,$lat,$lng);',
+      );
+    }
+
+    return queries;
+  }
+
+  List<NearbyPlace> mergeNearbyPlaces({
+    required List<NearbyPlace> oldPlaces,
+    required List<NearbyPlace> newPlaces,
     int limit = 24,
-    DateTime? lastFetchedAt,
-    bool forceRefresh = false,
-  }) async {
-    final latest = lastFetchedAt ?? getLatestFetchedAt(existingPlaces);
-    final needsRefresh = forceRefresh || shouldRefresh(latest);
+  }) {
+    final result = <NearbyPlace>[];
+    final seen = <String>{};
 
-    if (!needsRefresh && existingPlaces.isNotEmpty) {
-      final sorted = [...existingPlaces]
-        ..sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
+    for (final place in [...oldPlaces, ...newPlaces]) {
+      final name = place.name.trim();
+      if (name.isEmpty) continue;
 
-      return NearbyUpdateResult(
-        places: sorted.take(limit).toList(),
-        didRefresh: false,
-        refreshedAt: latest ?? DateTime.now(),
-      );
+      final key = _dedupeKey(place);
+      if (seen.add(key)) result.add(place);
     }
 
-    final fresh = await getNearbyForCoordinates(
-      lat: lat,
-      lng: lng,
-      categories: categories,
-      limit: math.max(limit, 40),
-    );
+    result.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
 
-    if (fresh.isEmpty && existingPlaces.isNotEmpty) {
-      final sorted = [...existingPlaces]
-        ..sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
-
-      return NearbyUpdateResult(
-        places: sorted.take(limit).toList(),
-        didRefresh: false,
-        refreshedAt: latest ?? DateTime.now(),
-      );
-    }
-
-    final merged = mergeNearbyPlaces(
-      oldPlaces: existingPlaces,
-      newPlaces: fresh,
-      limit: limit,
-    );
-
-    return NearbyUpdateResult(
-      places: merged,
-      didRefresh: true,
-      refreshedAt: DateTime.now(),
-    );
+    return result.take(limit).toList();
   }
 
   bool _acceptByRequestedCategory({
@@ -821,10 +1211,9 @@ out center;
     required String placeCategory,
     required String searchableText,
   }) {
-    // Single-category searches must stay strict so each tab/search returns
-    // only the requested bucket, not visually unrelated places.
     if (wantedCategories.length == 1) {
       final wanted = wantedCategories.first;
+
       switch (wanted) {
         case 'hotel':
           return _looksLikeHotel(placeCategory, searchableText);
@@ -841,8 +1230,6 @@ out center;
       }
     }
 
-    // Multi-category mode, such as Place Info nearby tab, can include several
-    // buckets, but each accepted item must still match one of them accurately.
     if (wantedCategories.contains('hotel') &&
         _looksLikeHotel(placeCategory, searchableText)) return true;
     if (wantedCategories.contains('restaurant') &&
@@ -876,8 +1263,6 @@ out center;
   }
 
   bool _looksLikeRestaurant(String placeCategory, String text) {
-    // Do not accept cafes in restaurant-only mode unless OSM explicitly tags it
-    // as restaurant/fast_food/food_court.
     return placeCategory == 'restaurant' ||
         text.contains('amenity:restaurant') ||
         text.contains('amenity:fast_food') ||
@@ -890,7 +1275,6 @@ out center;
   }
 
   bool _looksLikeCafe(String placeCategory, String text) {
-    // Keep cafe strict. No generic restaurant/fast_food here.
     return placeCategory == 'cafe' ||
         text.contains('amenity:cafe') ||
         text.contains('amenity:ice_cream') ||
@@ -926,18 +1310,12 @@ out center;
         text.contains('viewpoint') ||
         text.contains('gallery') ||
         text.contains('historic') ||
-        text.contains('archaeological') ||
         text.contains('monument') ||
-        text.contains('memorial') ||
-        text.contains('castle') ||
-        text.contains('fort') ||
-        text.contains('citadel') ||
+        text.contains('archaeological') ||
         text.contains('متحف') ||
-        text.contains('معلم') ||
-        text.contains('أثر') ||
-        text.contains('اثار') ||
-        text.contains('آثار') ||
-        text.contains('قلعة');
+        text.contains('أثري') ||
+        text.contains('اثري') ||
+        text.contains('معلم');
   }
 
   bool _looksLikeOuting(String placeCategory, String text) {
@@ -945,117 +1323,118 @@ out center;
         text.contains('leisure:park') ||
         text.contains('leisure:garden') ||
         text.contains('leisure:playground') ||
-        text.contains('leisure:beach_resort') ||
-        text.contains('leisure:sports_centre') ||
         text.contains('amenity:cinema') ||
         text.contains('amenity:theatre') ||
-        text.contains('amenity:arts_centre') ||
         text.contains('shop:mall') ||
-        text.contains('tourism:theme_park') ||
         text.contains('tourism:zoo') ||
         text.contains('tourism:aquarium') ||
+        text.contains('tourism:theme_park') ||
         text.contains('park') ||
         text.contains('garden') ||
-        text.contains('playground') ||
+        text.contains('mall') ||
         text.contains('cinema') ||
         text.contains('theatre') ||
-        text.contains('theater') ||
-        text.contains('mall') ||
         text.contains('zoo') ||
         text.contains('aquarium') ||
-        text.contains('beach') ||
+        text.contains('theme park') ||
+        text.contains('amusement') ||
         text.contains('حديقة') ||
-        text.contains('سينما') ||
         text.contains('مول') ||
-        text.contains('شاطئ') ||
-        text.contains('ملاهي');
+        text.contains('سينما') ||
+        text.contains('خروجة') ||
+        text.contains('خروجات');
   }
 
-  List<NearbyPlace> mergeNearbyPlaces({
-    required List<NearbyPlace> oldPlaces,
-    required List<NearbyPlace> newPlaces,
-    int limit = 24,
-  }) {
-    final map = <String, NearbyPlace>{};
-
-    for (final place in oldPlaces) {
-      map[_dedupeKey(place)] = place;
-    }
-
-    for (final place in newPlaces) {
-      final key = _dedupeKey(place);
-      if (!map.containsKey(key)) {
-        map[key] = place;
-        continue;
-      }
-
-      final existing = map[key]!;
-      map[key] = _pickBetterPlace(existing, place);
-    }
-
-    final merged = map.values.toList()
-      ..sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
-
-    return merged.take(limit).toList();
+  static bool get _isOverpassCoolingDown {
+    final until = _overpassCooldownUntil;
+    return until != null && DateTime.now().isBefore(until);
   }
 
-  NearbyPlace _pickBetterPlace(NearbyPlace oldPlace, NearbyPlace newPlace) {
-    final oldScore = _completenessScore(oldPlace);
-    final newScore = _completenessScore(newPlace);
+  static bool get _isNominatimCoolingDown {
+    final until = _nominatimCooldownUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
 
-    if (newScore >= oldScore) {
-      return newPlace.copyWith(
-        fetchedAt: newPlace.fetchedAt ?? DateTime.now(),
-      );
-    }
-
-    return oldPlace.copyWith(
-      fetchedAt: newPlace.fetchedAt ?? oldPlace.fetchedAt ?? DateTime.now(),
+  static void _startOverpassCooldown() {
+    _overpassCooldownUntil = DateTime.now().add(_cooldownDuration);
+    print(
+      '[Nearby] Overpass unavailable; cooling down live reload for '
+      '${_cooldownDuration.inSeconds}s',
     );
   }
 
-  double _completenessScore(NearbyPlace place) {
+  static void _startNominatimCooldown() {
+    _nominatimCooldownUntil = DateTime.now().add(_cooldownDuration);
+    print(
+      '[Nearby] Nominatim unavailable; cooling down text search for '
+      '${_cooldownDuration.inSeconds}s',
+    );
+  }
+
+  static String _dedupeKey(NearbyPlace place) {
+    final cleanName = _normalizeText(place.name);
+    final category = NearbyPlace._normalizeCategory(place.category);
+    return '$cleanName|$category';
+  }
+
+  static String _normalizeText(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('&', 'and')
+        .replaceAll(RegExp(r'[\u064B-\u065F]'), '')
+        .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static double _rankScore(NearbyPlace place) {
     double score = 0;
 
-    if (place.name.trim().isNotEmpty) score += 4;
-    if (place.address.trim().isNotEmpty) score += 3;
-    if (place.website != null && place.website!.trim().isNotEmpty) score += 2;
-    if (place.bookingUrl != null && place.bookingUrl!.trim().isNotEmpty) {
-      score += 2;
+    if (place.distanceKm > 0 && place.distanceKm < 999) {
+      score += math.max(0, 40 - place.distanceKm);
     }
-    if (place.wikipediaUrl != null && place.wikipediaUrl!.trim().isNotEmpty) {
-      score += 1.5;
+
+    if (place.rating > 0) score += place.rating * 5;
+    if (place.userRatingsTotal > 0) {
+      score += math.min(12, math.log(place.userRatingsTotal + 1));
     }
-    if (place.phone != null && place.phone!.trim().isNotEmpty) score += 1;
-    if (place.hasOpeningHours) score += 1;
-    if (place.imageUrl.trim().isNotEmpty) score += 1;
-    if (place.rating > 0) score += place.rating / 2;
-    if (place.userRatingsTotal > 0) score += 1;
 
-    return score;
-  }
+    if (place.hasOpeningHours) score += 2;
+    if (place.isOpenNow) score += 4;
+    if (place.website != null && place.website!.isNotEmpty) score += 2;
+    if (place.wikipediaUrl != null && place.wikipediaUrl!.isNotEmpty) score += 3;
 
-  String _dedupeKey(NearbyPlace place) {
-    return '${place.name.trim().toLowerCase()}|'
-        '${NearbyPlace._normalizeCategory(place.category)}|'
-        '${place.lat.toStringAsFixed(4)}|${place.lng.toStringAsFixed(4)}';
-  }
+    final name = place.name.toLowerCase();
 
-  double _rankScore(NearbyPlace place) {
-    double score = 100 - place.distanceKm;
-    score += _completenessScore(place);
+    const famousWords = [
+      'museum',
+      'tower',
+      'opera',
+      'palace',
+      'citadel',
+      'park',
+      'garden',
+      'mall',
+      'zoo',
+      'aquarium',
+      'cinema',
+      'theatre',
+      'theme',
+      'متحف',
+      'برج',
+      'قصر',
+      'قلعة',
+      'حديقة',
+      'مول',
+      'سينما',
+    ];
 
-    final cat = NearbyPlace._normalizeCategory(place.category);
-    final text = [place.name, place.category, ...place.types].join(' ').toLowerCase();
-    if (cat == 'hotel') score += 2;
-    if (cat == 'restaurant') score += 2;
-    if (cat == 'cafe') score += 3.5;
-    if (text.contains('cafe') ||
-        text.contains('coffee') ||
-        text.contains('كافيه') ||
-        text.contains('مقهى')) score += 3;
-    if (cat == 'tourist') score += 3;
-    if (cat == 'outing') score += 2.5;
+    for (final word in famousWords) {
+      if (name.contains(word)) {
+        score += 4;
+        break;
+      }
+    }
 
     return score;
   }
