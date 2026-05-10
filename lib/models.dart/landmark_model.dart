@@ -1,5 +1,5 @@
 class Landmark {
-  static const int currentImagePipelineVersion = 18;
+  static const int currentImagePipelineVersion = 21;
 
   static bool _isBadImageUrl(String url) {
     final lower = url.trim().toLowerCase();

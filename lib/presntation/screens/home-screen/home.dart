@@ -358,9 +358,8 @@ class _HomeState extends State<Home> {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.withOpacity(0.16),
-                    Colors.black.withOpacity(0.08),
-                    Colors.black.withOpacity(0.42),
+                  AppColors.ivoryCream
+                  
                   ],
                 ),
               ),

@@ -36,7 +36,7 @@ class _CandidateImage {
 }
 
 class ImageService {
-  static const int imagePipelineVersion = 20;
+  static const int imagePipelineVersion = 21;
 
   static const String _pexelsApiKey = 'ZIquWI0rbO9moUylrWLfGPWjLslcTBX0Xgh1ehFUxj7NOaunRKZN6NJD';
   static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfuFg';
@@ -52,6 +52,23 @@ class ImageService {
     'User-Agent': 'GeoGuideApp/1.0 (student-project; image-fetching)',
     'Accept': 'application/json',
   };
+
+  static String _canonicalImageUrl(String url) {
+    final clean = url.trim();
+    if (clean.isEmpty) return '';
+
+    final uri = Uri.tryParse(clean);
+    if (uri == null) return clean;
+
+    // Wikimedia URLs returned by Commons can include tracking query params
+    // such as utm_source. Flutter's NetworkImage may hit 429 on these exact
+    // original URLs. Keep the same file but remove tracking params.
+    if (uri.host.contains('wikimedia.org') || uri.host.contains('wikipedia.org')) {
+      return uri.replace(query: '', fragment: '').toString();
+    }
+
+    return uri.replace(fragment: '').toString();
+  }
 
   bool isBadImageUrl(String url) {
     final lower = url.trim().toLowerCase();
@@ -90,7 +107,7 @@ class ImageService {
     final result = <String>[];
 
     for (final url in urls) {
-      final clean = url.trim();
+      final clean = _canonicalImageUrl(url);
       final key = _dedupeKey(clean);
       if (_isValidImageUrl(clean) &&
           !isBadImageUrl(clean) &&
@@ -114,7 +131,7 @@ class ImageService {
 
   Future<File?> cacheImage(String url) async {
     try {
-      final clean = url.trim();
+      final clean = _canonicalImageUrl(url);
       if (!_isValidImageUrl(clean)) return null;
       if (isBadImageUrl(clean)) return null;
       if (_failedImageUrls.contains(clean)) return null;
@@ -190,6 +207,7 @@ class ImageService {
 
     final futures = <Future<List<_CandidateImage>>>[
       _fetchFromWikipediaCandidates(place, city, normalizedCategory),
+      _fetchFromCommonsCandidates(place, city, normalizedCategory),
       _fetchFromPexelsCandidates(place, city, normalizedCategory),
       _fetchFromUnsplashCandidates(place, city, normalizedCategory),
     ];
@@ -198,10 +216,12 @@ class ImageService {
     mergeCandidates(exactResults[0]);
     mergeCandidates(exactResults[1]);
     mergeCandidates(exactResults[2]);
+    mergeCandidates(exactResults[3]);
 
     debugPrint('[Images] Wikipedia returned=${exactResults[0].length}');
-    debugPrint('[Images] Pexels exact returned=${exactResults[1].length}');
-    debugPrint('[Images] Unsplash exact returned=${exactResults[2].length}');
+    debugPrint('[Images] Commons returned=${exactResults[1].length}');
+    debugPrint('[Images] Pexels exact returned=${exactResults[2].length}');
+    debugPrint('[Images] Unsplash exact returned=${exactResults[3].length}');
 
     // No generic fallback images: if the APIs cannot prove that the image
     // belongs to the exact place, we return fewer images rather than wrong ones.
@@ -209,8 +229,12 @@ class ImageService {
     final ranked = byKey.values.toList()
       ..sort((a, b) => b.score.compareTo(a.score));
 
+    final trustedRanked = ranked
+        .where((e) => e.source == 'wikipedia' || e.source == 'wikimedia_commons' || e.score >= _minimumScoreForCategory(normalizedCategory, place))
+        .toList();
+
     final finalImages = sanitizeImages(
-      ranked.take(safeCount).map((e) => e.url).toList(),
+      trustedRanked.take(safeCount).map((e) => e.url).toList(),
     ).take(safeCount).toList();
 
     debugPrint('[Images] FINAL returned=${finalImages.length} for $place');
@@ -273,7 +297,9 @@ class ImageService {
         for (final raw in pages.values) {
           if (raw is! Map) continue;
           final page = Map<String, dynamic>.from(raw);
-          final img = (page['thumbnail']?['source'] ?? '').toString().trim();
+          final img = _canonicalImageUrl(
+            (page['thumbnail']?['source'] ?? '').toString(),
+          );
           if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
             continue;
           }
@@ -335,7 +361,8 @@ class ImageService {
           '&gsrsearch=${Uri.encodeQueryComponent(query)}'
           '&gsrlimit=8'
           '&prop=imageinfo'
-          '&iiprop=url|mime|extmetadata'
+          '&iiprop=url|thumburl|mime|extmetadata'
+          '&iiurlwidth=1400'
           '&format=json'
           '&origin=*',
         );
@@ -359,7 +386,9 @@ class ImageService {
             continue;
           }
 
-          final img = (info['url'] ?? '').toString().trim();
+          final img = _canonicalImageUrl(
+            (info['thumburl'] ?? info['url'] ?? '').toString(),
+          );
           if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
             continue;
           }
@@ -460,8 +489,9 @@ class ImageService {
           final img = (map['urls']?['regular'] ?? map['urls']?['full'] ?? '')
               .toString()
               .trim();
+          final cleanImg = _canonicalImageUrl(img);
 
-          if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
+          if (!_isValidImageUrl(cleanImg) || !_looksUseful(cleanImg) || isBadImageUrl(cleanImg)) {
             continue;
           }
 
@@ -480,6 +510,10 @@ class ImageService {
             fromWikipedia: false,
             isFallback: useFallbackQueries,
           );
+
+          // Stock APIs often return visually nice but unrelated city/category photos.
+          // Keep only results whose metadata proves the exact place identity.
+          if (!_hasPlaceIdentityEvidence(metaText, place)) continue;
 
           final threshold = _minimumScoreForCategory(category, place);
           if (score < threshold) continue;
@@ -553,8 +587,9 @@ class ImageService {
                   : '')
               .toString()
               .trim();
+          final cleanImg = _canonicalImageUrl(img);
 
-          if (!_isValidImageUrl(img) || !_looksUseful(img) || isBadImageUrl(img)) {
+          if (!_isValidImageUrl(cleanImg) || !_looksUseful(cleanImg) || isBadImageUrl(cleanImg)) {
             continue;
           }
 
@@ -572,6 +607,10 @@ class ImageService {
             fromWikipedia: false,
             isFallback: useFallbackQueries,
           );
+
+          // Stock APIs often return visually nice but unrelated city/category photos.
+          // Keep only results whose metadata proves the exact place identity.
+          if (!_hasPlaceIdentityEvidence(metaText, place)) continue;
 
           final threshold = _minimumScoreForCategory(category, place);
           if (score < threshold) continue;
@@ -844,18 +883,37 @@ class ImageService {
     }
   }
 
+  bool _hasPlaceIdentityEvidence(String meta, String place) {
+    final text = _normalizeText(meta);
+    final p = _normalizeText(place);
+    if (p.isNotEmpty && text.contains(p)) return true;
+
+    final identity = _identityTokens(place);
+    if (identity.any(text.contains)) return true;
+
+    final strong = _strongPlaceTokens(place);
+    final matchedStrong = strong.where(text.contains).length;
+
+    // Generic names like "Cairo Tower" need the full phrase, not just "tower".
+    if (_isGenericNamedPlace(place)) return false;
+
+    // For distinctive multi-token names, at least two strong tokens are acceptable.
+    return strong.length >= 2 && matchedStrong >= 2;
+  }
+
   int _minimumScoreForCategory(String category, String place) {
     final cat = _normalizeCategory(category);
     final hasIdentity = _identityTokens(place).isNotEmpty;
     final genericName = _isGenericNamedPlace(place);
 
-    if (genericName) return 72;
-    if (cat == 'tourist') return hasIdentity ? 64 : 58;
-    if (cat == 'hotel') return hasIdentity ? 62 : 56;
-    if (cat == 'restaurant') return hasIdentity ? 62 : 56;
-    if (cat == 'cafe') return hasIdentity ? 62 : 56;
-    if (cat == 'outing') return hasIdentity ? 58 : 52;
-    return 60;
+    // Higher thresholds reduce wrong "same city / same category" photos.
+    if (genericName) return 92;
+    if (cat == 'tourist') return hasIdentity ? 82 : 74;
+    if (cat == 'hotel') return hasIdentity ? 78 : 70;
+    if (cat == 'restaurant') return hasIdentity ? 78 : 70;
+    if (cat == 'cafe') return hasIdentity ? 78 : 70;
+    if (cat == 'outing') return hasIdentity ? 74 : 68;
+    return 76;
   }
 
   bool _hasCategoryVisualSignal(String meta, String category) {
