@@ -26,34 +26,41 @@ class PlaceCategoryNormalizer {
   }
 
   static const _hotelTokens = [
-    'hotel', 'resort', 'hostel', 'guesthouse', 'guest_house', 'motel',
-    'lodge', 'lodging', 'inn', 'accommodation', 'فندق', 'منتجع', 'نزل'
+    'hotel', 'hotels', 'resort', 'hostel', 'guesthouse', 'guest_house',
+    'motel', 'lodge', 'lodging', 'inn', 'accommodation',
+    'فندق', 'فنادق', 'اوتيل', 'أوتيل', 'منتجع', 'نزل'
   ];
 
   static const _restaurantTokens = [
-    'restaurant', 'dining', 'fast_food', 'food_court', 'grill', 'seafood',
-    'steakhouse', 'eatery', 'bistro', 'مطعم', 'طعام'
+    'restaurant', 'restaurants', 'dining', 'fast_food', 'food_court',
+    'grill', 'seafood', 'steakhouse', 'eatery', 'bistro', 'food', 'eat',
+    'مطعم', 'مطاعم', 'طعام', 'اكل', 'أكل', 'مشويات', 'سمك'
   ];
 
   static const _cafeTokens = [
-    'cafe', 'café', 'coffee', 'tea_house', 'bakery', 'patisserie',
-    'كافيه', 'قهوة', 'مقهى'
+    'cafe', 'cafes', 'café', 'coffee', 'tea_house', 'bakery',
+    'patisserie', 'cafeteria', 'caffe',
+    'كافيه', 'كافيهات', 'كافتريا', 'كافيتريا', 'كافترية',
+    'كوفي', 'قهوة', 'مقهى', 'مقهي'
   ];
 
   static const _outingTokens = [
-    'outing', 'park', 'garden', 'zoo', 'aquarium', 'mall', 'shopping',
-    'cinema', 'theater', 'theatre', 'stadium', 'amusement', 'beach',
-    'leisure', 'nightlife', 'entertainment', 'activity', 'activities',
-    'hangout', 'fun', 'خروجات', 'فسح', 'فسحة', 'ترفيه', 'حديقة', 'شاطئ',
-    'ملاهي', 'تسوق'
+    'outing', 'outings', 'park', 'garden', 'zoo', 'aquarium', 'mall',
+    'shopping', 'cinema', 'theater', 'theatre', 'stadium', 'amusement',
+    'beach', 'leisure', 'nightlife', 'entertainment', 'activity',
+    'activities', 'hangout', 'fun',
+    'خروجات', 'خروجة', 'فسح', 'فسحة', 'ترفيه', 'حديقة', 'حدائق',
+    'شاطئ', 'ملاهي', 'تسوق', 'مول', 'سينما'
   ];
 
   static const _touristTokens = [
-    'tourist', 'attraction', 'landmark', 'monument', 'historic', 'museum',
-    'temple', 'mosque', 'church', 'palace', 'castle', 'citadel', 'fort',
-    'pyramid', 'tomb', 'ruins', 'archaeological', 'gallery', 'viewpoint',
-    'heritage', 'sight', 'معلم', 'متحف', 'معبد', 'مسجد', 'كنيسة', 'قلعة',
-    'هرم', 'آثار'
+    'tourist', 'attraction', 'landmark', 'monument', 'historic', 'historical',
+    'museum', 'temple', 'mosque', 'church', 'palace', 'castle', 'citadel',
+    'fort', 'pyramid', 'tomb', 'ruins', 'archaeological',
+    'archaeological site', 'heritage', 'valley', 'necropolis', 'burial',
+    'gallery', 'viewpoint', 'sight',
+    'مزار', 'معلم', 'متحف', 'معبد', 'مسجد', 'جامع', 'كنيسة', 'قلعة',
+    'هرم', 'اهرام', 'أهرام', 'آثار', 'اثار', 'وادي', 'مقابر'
   ];
 
   static bool _containsAny(String text, List<String> tokens) {

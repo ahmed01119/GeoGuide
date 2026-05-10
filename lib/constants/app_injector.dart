@@ -31,6 +31,8 @@ class AppInjector {
   static final SearchEngine search = SearchEngine(
     firebase: firebase,
     wikipedia: wikipedia,
+    nearby: nearby,
+  
   );
 
   static final PlannerService planner = PlannerService();

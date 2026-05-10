@@ -58,18 +58,37 @@ class DataPipelineService {
     void notify(String msg) => onProgress?.call(msg);
 
     if (!forceRefresh) {
-      final hasCached = await _firebase.cityHasLandmarks(city.id);
-      if (hasCached) {
-        notify('Loading "${city.name}"…');
-        final cached = await _firebase.getLandmarksByCity(city.id);
-        final valid = _filterValid(cached);
+      notify('Loading "${city.name}" from database…');
 
-        // Seed memory cache
+      final cachedById = await _firebase.getLandmarksByCity(city.id);
+      final allCached = await _firebase.getAllLandmarks();
+      final cityNameLower = city.name.trim().toLowerCase();
+
+      // Some generated/search documents may have an empty or old cityId,
+      // but still have the correct city/address. Use both cityId and city name
+      // before deciding that the city needs a full external generation.
+      final cachedByName = allCached.where((lm) {
+        final lmCity = lm.city.trim().toLowerCase();
+        final lmAddress = lm.address.trim().toLowerCase();
+        return lmCity == cityNameLower ||
+            lmCity.contains(cityNameLower) ||
+            cityNameLower.contains(lmCity) ||
+            lmAddress.contains(cityNameLower);
+      }).toList();
+
+      final cached = _filterAndDedup([
+        ...cachedById,
+        ...cachedByName,
+      ], city.name);
+
+      final valid = _filterValid(cached);
+      if (valid.isNotEmpty) {
         for (final lm in valid) {
           if (!_cache.has(lm.id)) _cache.put(lm);
         }
 
-        // Refresh stale items in background (don't block UI)
+        // Keep enrichment non-blocking. If you want zero background API calls
+        // when cached data exists, comment this line.
         _backgroundRefresh(valid, city, notify);
 
         return valid;
@@ -185,8 +204,9 @@ class DataPipelineService {
         if (_cache.needsImageRefresh(lm.id)) {
           final fetched = await _images.fetchImages(
             current.name,
-            cityName: city.name,
-            count: 7,
+            cityName: current.city.trim().isNotEmpty ? current.city : city.name,
+            category: current.category,
+            count: 6,
             excludeUrls: current.mediaUrls,
           );
 
@@ -200,6 +220,8 @@ class DataPipelineService {
                     merged.isNotEmpty ? merged.first : current.imageUrl,
                 mediaUrls: merged,
                 imagesRefreshedAt: DateTime.now(),
+                imagePipelineVersion: ImageService.imagePipelineVersion,
+                imagesAreFallback: false,
               );
               dirty = true;
             }
@@ -275,8 +297,9 @@ class DataPipelineService {
           try {
             final urls = await _images.fetchImages(
               lm.name,
-              cityName: cityName,
-              count: 7,
+              cityName: lm.city.trim().isNotEmpty ? lm.city : cityName,
+              category: lm.category,
+              count: 6,
               excludeUrls: lm.mediaUrls,
             );
 
@@ -287,6 +310,8 @@ class DataPipelineService {
               imageUrl: merged.isNotEmpty ? merged.first : lm.imageUrl,
               mediaUrls: merged,
               imagesRefreshedAt: DateTime.now(),
+              imagePipelineVersion: ImageService.imagePipelineVersion,
+              imagesAreFallback: false,
             );
           } catch (_) {
             return lm;
@@ -399,7 +424,7 @@ class DataPipelineService {
               'tourist',
               'outing',
             ],
-            limit: 18,
+            limit: 18, cityName: '',
           );
 
           if (nearbyResult.places.isEmpty) continue;
@@ -519,11 +544,13 @@ class DataPipelineService {
       }
     }
 
+    // New verified images should be first. Old images may be from an older
+    // pipeline version and must not keep the UI stuck on a placeholder.
+    for (final u in newUrls) add(u);
     if (existingMain.trim().isNotEmpty) add(existingMain);
     for (final u in existingList) add(u);
-    for (final u in newUrls) add(u);
 
-    return result.take(7).toList();
+    return result.take(6).toList();
   }
 
   String _fallbackDescription(Landmark lm) {

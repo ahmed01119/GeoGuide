@@ -88,25 +88,22 @@ class TopPlacesSection extends StatelessWidget {
           color: const Color(0xFFF9F4EF),
           borderRadius: BorderRadius.circular(24),
         ),
-        child: Center(
-          // FIX: Only show spinner if loading, otherwise show empty message
-          child: places.isEmpty
-              ? const Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.location_off_outlined,
-                        size: 36, color: Color(0xFF8D6E63)),
-                    SizedBox(height: 10),
-                    Text(
-                      'No places found',
-                      style: TextStyle(
-                        color: Color(0xFF8D6E63),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                )
-              : const CircularProgressIndicator(),
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.location_off_outlined,
+                  size: 36, color: Color(0xFF8D6E63)),
+              SizedBox(height: 10),
+              Text(
+                'No places found',
+                style: TextStyle(
+                  color: Color(0xFF8D6E63),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
         ),
       )
                   : ListView.builder(
@@ -125,7 +122,9 @@ class TopPlacesSection extends StatelessWidget {
                           child: SizedBox(
                             width: 210, // ✅ لازم نفس عرض الكارد
                             child: PlaceCard(
-                              key: ValueKey(place.id),
+                              key: ValueKey(
+                                '${place.id}_${place.name}_${place.city}_${place.lat}_${place.lng}',
+                              ),
                               place: place,
                             ),
                           ),

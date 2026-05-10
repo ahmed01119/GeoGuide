@@ -91,27 +91,26 @@ class PlaceRepository {
         existing.name,
         cityName: existing.city,
         category: existing.category,
-        count: 7,
+        count: 6,
         excludeUrls: [existing.imageUrl, ...existing.mediaUrls],
       );
       if (fetched.isEmpty) return;
 
       final merged = _mergeUrls(existing.imageUrl, existing.mediaUrls, fetched);
-      final validBefore = _validUrls(existing.mediaUrls).length +
-          (existing.imageUrl.trim().startsWith('http') ? 1 : 0);
-      final validAfter = merged.length;
-      if (validAfter <= validBefore && existing.imageUrl.trim().isNotEmpty) return;
-
       final updated = existing.copyWith(
         imageUrl: merged.isNotEmpty ? merged.first : existing.imageUrl,
         mediaUrls: merged,
         imagesRefreshedAt: DateTime.now(),
+        imagePipelineVersion: ImageService.imagePipelineVersion,
+        imagesAreFallback: false,
       );
       _cache.merge(updated);
       await _firebase.partialUpdate(id, {
         'imageUrl': updated.imageUrl,
         'mediaUrls': updated.mediaUrls,
         'imagesRefreshedAt': updated.imagesRefreshedAt!.toIso8601String(),
+        'imagePipelineVersion': ImageService.imagePipelineVersion,
+        'imagesAreFallback': false,
       });
     } catch (e) {
       print('[PlaceRepository] enrichImages error: $e');
@@ -162,6 +161,23 @@ class PlaceRepository {
   Future<void> enrichNearby(Landmark landmark) async {
     final id = landmark.id.trim();
     if (id.isEmpty || _enrichingNearby.contains(id)) return;
+
+    final provider = (landmark.sources?['provider'] ?? '').toString();
+    final category = PlaceCategoryNormalizer.normalize(
+      landmark.category,
+      contextText: landmark.name,
+    );
+
+    // Category search already returns nearby/category POIs from Overpass/Nominatim.
+    // Running another nearby lookup for each cafe/restaurant/hotel immediately
+    // after search causes many Overpass timeouts and slow image/card loading.
+    if ((provider == 'nearby_overpass' ||
+            provider == 'nominatim_category' ||
+            provider == 'known_landmark_fallback') &&
+        (category == 'cafe' || category == 'restaurant' || category == 'hotel')) {
+      return;
+    }
+
     if (!_cache.needsNearbyRefresh(id)) return;
     if (landmark.lat == 0 || landmark.lng == 0) return;
 
@@ -186,7 +202,7 @@ class PlaceRepository {
           'cafe',
           'tourist',
           'outing',
-        ],
+        ], cityName: '',
       );
 
       List<NearbyPlace> resolved = result.places;
@@ -335,11 +351,12 @@ class PlaceRepository {
       if (seen.add(key)) result.add(clean);
     }
 
+    // New verified images first. Existing images may belong to an older pipeline.
+    for (final u in fetched) add(u);
     add(mainUrl);
     for (final u in existing) add(u);
-    for (final u in fetched) add(u);
 
-    return result.take(7).toList();
+    return result.take(6).toList();
   }
 
   List<String> _validUrls(List<String> urls) =>
