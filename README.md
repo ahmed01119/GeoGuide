@@ -298,9 +298,6 @@ lib/
 - Offline maps support
 # 📸 Demo & Links
 
-## 🌍 Live Demo
-
-https://geoguideapp-21d6e.web.app
 
 ## 📚 Documentation
 
