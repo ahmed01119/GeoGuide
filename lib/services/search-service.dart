@@ -489,13 +489,50 @@ class SearchEngine {
 
     final suggestions = await getHints(trimmed, cityName: cityName);
 
+    final detectedCityForResponse =
+        _detectedCityFromResults(results, '$trimmed $corrected') ??
+            resolvedCityFromQuery;
+
     return SearchResult(
       correctedQuery: corrected,
       results: results,
       suggestions: suggestions,
-      detectedCity: resolvedCityFromQuery,
+      detectedCity: detectedCityForResponse,
       detectedCategory: detectedCategory,
     );
+  }
+
+  String? _detectedCityFromResults(List<Landmark> results, String queryText) {
+    final q = _normalizeSearchText(queryText);
+
+    for (final entry in _canonicalCityMap.entries) {
+      final key = _normalizeSearchText(entry.key);
+      if (key.isNotEmpty && (q == key || q.contains(key) || key.contains(q))) {
+        return entry.value;
+      }
+    }
+
+    for (final lm in results) {
+      final raw =
+          '${lm.name} ${lm.city} ${lm.address} ${lm.shortDescription} ${lm.description}';
+      final canonicalFromText = _canonicalizeGeneratedCity(
+        lm.city,
+        query: raw,
+      );
+
+      if (canonicalFromText.trim().isNotEmpty &&
+          canonicalFromText.trim().toLowerCase() != 'egypt') {
+        return canonicalFromText;
+      }
+
+      final resolved = _resolveCity(raw, null);
+      if ((resolved ?? '').trim().isNotEmpty &&
+          resolved!.trim().toLowerCase() != 'egypt') {
+        return resolved;
+      }
+    }
+
+    return null;
   }
 
   Future<List<String>> getHints(String query, {String? cityName}) async {

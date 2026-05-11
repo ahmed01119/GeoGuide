@@ -376,9 +376,12 @@ class _HomeState extends State<Home> {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                  AppColors.ivoryCream,
-                  AppColors.ivoryCream
-                  
+                    Colors.transparent,
+
+                    Colors.transparent,
+                    Colors.transparent,
+
+
                   ],
                 ),
               ),

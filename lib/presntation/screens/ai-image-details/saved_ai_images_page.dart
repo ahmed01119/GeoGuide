@@ -1,12 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/saved_ai_image_model.dart';
 import 'package:geoguide/presntation/screens/ai-image-details/ai_image_details_screen.dart';
 import 'package:geoguide/services/firebase_service.dart';
 import 'package:geoguide/services/landmark_image_ai_service.dart';
 
-const _kBrown = Color(0xFF5C4033);
+const _kBrown = AppColors.chestnutBrown;
 const _kBrownMed = Color(0xFF8D6E63);
 const _kBrownLight = Color(0xFFF4ECE5);
 const _kBg = Color(0xFFF7F1EB);
@@ -46,24 +47,9 @@ class SavedAiImagesPage extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        InkWell(
-                          borderRadius: BorderRadius.circular(50),
+                        _GlassIconButton(
+                          icon: Icons.arrow_back_ios_new_rounded,
                           onTap: () => Navigator.pop(context),
-                          child: Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.16),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.18),
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.arrow_back_ios_new_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                          ),
                         ),
                         const SizedBox(width: 12),
                         const Icon(
@@ -318,6 +304,44 @@ class _SmallPill extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _GlassIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _GlassIconButton({
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final buttonSize = (width * 0.112).clamp(42.0, 50.0).toDouble();
+
+    return Container(
+      width: buttonSize,
+      height: buttonSize,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12), // مربع بحواف مدوّرة
+        color: Colors.white.withOpacity(0.10),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.18),
+          width: 1,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Icon(
+          icon,
+          color: Colors.white,
+          size: (buttonSize * 0.43).clamp(18.0, 22.0).toDouble(),
+        ),
       ),
     );
   }

@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geoguide/constants/app_colors.dart';
@@ -28,29 +30,31 @@ class _ProfileState extends State<Profile> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F1EB),
-      body: SafeArea(
-        child: BlocConsumer<UserCubit, UserState>(
-          listenWhen: (prev, curr) => curr is UserInfoUpdated,
-          listener: (context, state) {
-            if (state is UserInfoUpdated) {
-              context.read<UserCubit>().getProfile();
-            }
-          },
-          buildWhen: (prev, curr) =>
-              curr is GetProfileLoading ||
-              curr is GetProfileSuccess ||
-              curr is GetProfileFailure,
-          builder: (context, state) {
-            if (state is GetProfileLoading) {
-              return const Center(
+      body: BlocConsumer<UserCubit, UserState>(
+        listenWhen: (prev, curr) => curr is UserInfoUpdated,
+        listener: (context, state) {
+          if (state is UserInfoUpdated) {
+            context.read<UserCubit>().getProfile();
+          }
+        },
+        buildWhen: (prev, curr) =>
+            curr is GetProfileLoading ||
+            curr is GetProfileSuccess ||
+            curr is GetProfileFailure,
+        builder: (context, state) {
+          if (state is GetProfileLoading) {
+            return SafeArea(
+              child: Center(
                 child: CircularProgressIndicator(
                   color: Color(0xFF8D6E63),
                 ),
-              );
-            }
+              ),
+            );
+          }
 
-            if (state is GetProfileFailure) {
-              return Center(
+          if (state is GetProfileFailure) {
+            return SafeArea(
+              child: Center(
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
                   padding: const EdgeInsets.all(24),
@@ -100,234 +104,300 @@ class _ProfileState extends State<Profile> {
                     ],
                   ),
                 ),
-              );
-            }
+              ),
+            );
+          }
 
-            if (state is GetProfileSuccess) {
-              final user = UserModel(
-                id: 0,
-                name: state.name.isNotEmpty ? state.name : 'No Name',
-                email: state.email.isNotEmpty ? state.email : 'No Email',
-                phoneNumber: state.phoneNumber,
-                country: state.country,
-                role: state.role.isNotEmpty ? state.role : 'User',
-                visits: 0,
-                favorites: 0,
-              );
+          if (state is GetProfileSuccess) {
+            const themeBg = Color(0xFFF7F1EB);
+            final user = UserModel(
+              id: 0,
+              name: state.name.isNotEmpty ? state.name : 'No Name',
+              email: state.email.isNotEmpty ? state.email : 'No Email',
+              phoneNumber: state.phoneNumber,
+              country: state.country,
+              role: state.role.isNotEmpty ? state.role : 'User',
+              visits: 0,
+              favorites: 0,
+            );
 
-              return CustomScrollView(
-                physics: const BouncingScrollPhysics(),
-                slivers: [
-                  SliverToBoxAdapter(
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-                      decoration: BoxDecoration(
-                        color: AppColors.chestnutBrown,
-                        borderRadius: const BorderRadius.vertical(
-                          bottom: Radius.circular(34),
+            return CustomScrollView(
+              physics: const BouncingScrollPhysics(),
+              slivers: [
+                SliverAppBar(
+                  expandedHeight: 280,
+                  pinned: true,
+                  stretch: true,
+                  title: Center(
+                    child: Text(
+                                              'My Profile',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 25,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: .4,
+                                              ),
+                                            ),
+                  ),
+                  actions: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 16),
+                      child: _GlassIconButton(
+                        icon: Icons.edit_rounded,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => BlocProvider.value(
+                                value: context.read<UserCubit>(),
+                                child: const Settings(),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                  backgroundColor: AppColors.chestnutBrown,
+                  shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.vertical(
+                      bottom: Radius.circular(30),
+                    ),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  leading: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: _GlassIconButton(
+                      icon: Icons.arrow_back_ios_new_rounded,
+                      onTap: () => Navigator.pop(context),
+                    ),
+                  ),
+                  flexibleSpace: FlexibleSpaceBar(
+                    background: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Container(
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                AppColors.chestnutBrown,
+                              ],
+                            ),
+                          ),
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.chestnutBrown.withOpacity(0.22),
-                            blurRadius: 18,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              InkWell(
-                                borderRadius: BorderRadius.circular(50),
-                                onTap: () => Navigator.pop(context),
-                                child: Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.16),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.18),
-                                    ),
-                                  ),
-                                  child: const Icon(
-                                    Icons.arrow_back_ios_new_rounded,
-                                    color: Colors.white,
-                                    size: 18,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              const Icon(
-                                Icons.person_rounded,
-                                color: Colors.white,
-                                size: 24,
-                              ),
-                              const SizedBox(width: 8),
-                              const Text(
-                                'My Profile',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            'Manage your personal information and account settings.',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
-                              fontSize: 13.5,
-                              height: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          UserProfileHeader(
-                            user: user,
-                            imageUrl: state.imageUrl,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Personal Information',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF2E251F),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          const Text(
-                            'View your saved account details.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Color(0xFF81756C),
-                              height: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.all(16),
+                        Positioned.fill(
+                          child: Container(
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(24),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.05),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 8),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              children: [
-                                UserStatsCard(
-                                  icon: Icons.person_rounded,
-                                  title: 'Name',
-                                  value: user.name,
-                                ),
-                                UserStatsCard(
-                                  icon: Icons.email_rounded,
-                                  title: 'Email',
-                                  value: user.email,
-                                ),
-                                UserStatsCard(
-                                  icon: Icons.phone_rounded,
-                                  title: 'Phone',
-                                  value: user.phoneNumber.isNotEmpty
-                                      ? user.phoneNumber
-                                      : 'Not set',
-                                ),
-                                UserStatsCard(
-                                  icon: Icons.flag_rounded,
-                                  title: 'Country',
-                                  value: user.country.isNotEmpty
-                                      ? user.country
-                                      : 'Not set',
-                                ),
-                                UserStatsCard(
-                                  icon: Icons.verified_user_rounded,
-                                  title: 'Role',
-                                  value: user.role,
-                                ),
-                                UserStatsCard(
-                                  icon: Icons.bookmark_rounded,
-                                  title: 'Saved AI Images',
-                                  value: 'View your saved results',
-                                  trailingIcon: Icons.arrow_forward_ios_rounded,
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            const SavedAiImagesPage(),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ],
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.transparent,
+                                  Colors.transparent,
+
+                                ],
+                              ),
                             ),
                           ),
-                          const SizedBox(height: 22),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                elevation: 0,
-                                backgroundColor: AppColors.chestnutBrown,
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size(double.infinity, 56),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(18),
-                                ),
-                              ),
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => BlocProvider.value(
-                                      value: context.read<UserCubit>(),
-                                      child: const Settings(),
-                                    ),
+                        ),
+                        Positioned(
+                          left: 16,
+                          right: 16,
+                          bottom: 22,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(24),
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.14),
+                                  borderRadius: BorderRadius.circular(24),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.22),
                                   ),
-                                );
-                              },
-                              icon: const Icon(Icons.edit_rounded),
-                              label: const Text(
-                                'Edit Profile',
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    
+                                    
+                                    UserProfileHeader(
+                                      user: user,
+                                      imageUrl: state.imageUrl,
+                                    ),
+
+                                  ],
                                 ),
                               ),
                             ),
                           ),
-                        ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Transform.translate(
+                    offset: const Offset(0, -1),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: themeBg,
+                        borderRadius: BorderRadius.vertical(
+                          top: Radius.circular(30),
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Personal Information',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF2E251F),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'View your saved account details.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Color(0xFF81756C),
+                                height: 1.5,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(24),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.05),
+                                    blurRadius: 16,
+                                    offset: const Offset(0, 8),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                children: [
+                                  UserStatsCard(
+                                    icon: Icons.person_rounded,
+                                    title: 'Name',
+                                    value: user.name,
+                                  ),
+                                  UserStatsCard(
+                                    icon: Icons.email_rounded,
+                                    title: 'Email',
+                                    value: user.email,
+                                  ),
+                                  UserStatsCard(
+                                    icon: Icons.phone_rounded,
+                                    title: 'Phone',
+                                    value: user.phoneNumber.isNotEmpty
+                                        ? user.phoneNumber
+                                        : 'Not set',
+                                  ),
+                                  UserStatsCard(
+                                    icon: Icons.flag_rounded,
+                                    title: 'Country',
+                                    value: user.country.isNotEmpty
+                                        ? user.country
+                                        : 'Not set',
+                                  ),
+                                  UserStatsCard(
+                                    icon: Icons.verified_user_rounded,
+                                    title: 'Role',
+                                    value: user.role,
+                                  ),
+                                  UserStatsCard(
+                                    icon: Icons.bookmark_rounded,
+                                    title: 'Saved AI Images',
+                                    value: 'View your saved results',
+                                    trailingIcon:
+                                        Icons.arrow_forward_ios_rounded,
+                                    onTap: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const SavedAiImagesPage(),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 22),
+                           
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ],
-              );
-            }
+                ),
+              ],
+            );
+          }
 
-            return const Center(
+          return SafeArea(
+            child: Center(
               child: CircularProgressIndicator(
                 color: Color(0xFF8D6E63),
               ),
-            );
-          },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _GlassIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _GlassIconButton({
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Material(
+          color: Colors.white.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: onTap,
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.20),
+                ),
+              ),
+              child: Icon(
+                icon,
+                color: Colors.white,
+                size: 18,
+              ),
+            ),
+          ),
         ),
       ),
     );

@@ -53,6 +53,12 @@ class _FavoritesPageState extends State<FavoritesPage> {
             pinned: true,
             stretch: true,
             backgroundColor: AppColors.chestnutBrown,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(
+                bottom: Radius.circular(30),
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
             leading: Padding(
               padding: const EdgeInsets.all(8),
               child: _GlassIconButton(
@@ -82,9 +88,12 @@ class _FavoritesPageState extends State<FavoritesPage> {
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            Colors.black.withOpacity(0.16),
-                            Colors.black.withOpacity(0.05),
-                            Colors.black.withOpacity(0.42),
+                            Colors.transparent,
+                            Colors.transparent,
+                            Colors.transparent,
+
+
+                            // AppColors.ivoryCream,
                           ],
                         ),
                       ),

@@ -137,122 +137,127 @@ class _UserProfileHeaderState extends State<UserProfileHeader> {
           color: Colors.white.withOpacity(0.18),
         ),
       ),
-      child: Column(
-        children: [
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              GestureDetector(
-                onTap: _showImagePreview,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.22),
-                      width: 2,
-                    ),
-                  ),
-                  child: CircleAvatar(
-                    radius: 48,
-                    backgroundColor: const Color(0xFFF4ECE5),
-                    backgroundImage: _getProfileImage(),
-                  ),
-                ),
-              ),
-
-              if (_isUploading)
-                Positioned.fill(
+      child: Expanded(
+        child: Row(
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                
+                GestureDetector(
+                  onTap: _showImagePreview,
                   child: Container(
+                    padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.25),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Center(
-                      child: SizedBox(
-                        width: 26,
-                        height: 26,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.4,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-              Positioned(
-                bottom: -2,
-                right: -2,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(50),
-                  onTap: _isUploading ? null : _pickImage,
-                  child: Container(
-                    padding: const EdgeInsets.all(9),
-                    decoration: BoxDecoration(
-                      color: AppColors.chestnutBrown,
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: Colors.white,
-                        width: 2,
+                        color: Colors.white.withOpacity(0.22),
+                        width: 4,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.12),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
                     ),
-                    child: const Icon(
-                      Icons.camera_alt_rounded,
-                      color: Colors.white,
-                      size: 18,
+                    child: CircleAvatar(
+                      radius: 48,
+                      backgroundColor: const Color(0xFFF4ECE5),
+                      backgroundImage: _getProfileImage(),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            widget.user.name.isNotEmpty ? widget.user.name : 'No Name',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: Colors.white,
+        
+                if (_isUploading)
+                  Positioned.fill(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.25),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: SizedBox(
+                          width: 26,
+                          height: 26,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.4,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+        
+                Positioned(
+                  bottom: -2,
+                  right: -2,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(50),
+                    onTap: _isUploading ? null : _pickImage,
+                    child: Container(
+                      padding: const EdgeInsets.all(9),
+                      decoration: BoxDecoration(
+                        color: AppColors.chestnutBrown,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white,
+                          width: 2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.12),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.camera_alt_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ),
+
+              ],
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            widget.user.email.isNotEmpty ? widget.user.email : 'No Email',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.85),
-              fontSize: 13.5,
-              fontWeight: FontWeight.w500,
+            const SizedBox(height: 24),
+            Column(
+              children: [
+                Text(
+                  widget.user.name.isNotEmpty ? widget.user.name : 'No Name',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+               
+            const SizedBox(height: 14),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+            const SizedBox(height: 44),
+
+                _buildInfoChip(
+                  icon: Icons.verified_user_rounded,
+                  label: widget.user.role.isNotEmpty ? widget.user.role : 'User',
+                ),
+            const SizedBox(height: 24),
+
+                _buildInfoChip(
+                  icon: Icons.flag_rounded,
+                  label: widget.user.country.isNotEmpty
+                      ? widget.user.country
+                      : 'Not set',
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _buildInfoChip(
-                icon: Icons.verified_user_rounded,
-                label: widget.user.role.isNotEmpty ? widget.user.role : 'User',
-              ),
-              _buildInfoChip(
-                icon: Icons.flag_rounded,
-                label: widget.user.country.isNotEmpty
-                    ? widget.user.country
-                    : 'Not set',
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+            
+            
+          ],
+        ),
       ),
     );
   }
@@ -270,25 +275,28 @@ class _UserProfileHeaderState extends State<UserProfileHeader> {
           color: Colors.white.withOpacity(0.16),
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 15,
-            color: Colors.white,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: const TextStyle(
+      child: Expanded(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
               color: Colors.white,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
+

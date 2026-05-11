@@ -59,6 +59,12 @@ class Settings extends StatelessWidget {
             toolbarHeight: 66,
             leadingWidth: 72,
             backgroundColor: AppColors.chestnutBrown,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(
+                bottom: Radius.circular(30),
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
             leading: Padding(
               padding: EdgeInsets.only(
                 left: horizontalPadding,
@@ -81,6 +87,9 @@ class Settings extends StatelessWidget {
                         end: Alignment.bottomRight,
                         colors: [
                           AppColors.chestnutBrown,
+                        
+
+
                         ],
                       ),
                     ),
@@ -92,9 +101,9 @@ class Settings extends StatelessWidget {
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            Colors.black.withOpacity(0.16),
-                            Colors.black.withOpacity(0.05),
-                            Colors.black.withOpacity(0.42),
+                            Colors.transparent,
+                            Colors.transparent,
+                            Colors.transparent,
                           ],
                         ),
                       ),

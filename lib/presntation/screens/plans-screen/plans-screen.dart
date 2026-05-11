@@ -44,6 +44,8 @@ class SavedPlansPage extends StatelessWidget {
                         end: Alignment.bottomRight,
                         colors: [
                           AppColors.chestnutBrown,
+                                AppColors.deepChestnut,
+
                         ],
                       ),
                     ),

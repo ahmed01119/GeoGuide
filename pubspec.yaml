@@ -54,11 +54,13 @@ dependencies:
   share_plus: ^7.0.0
   cached_network_image: ^3.3.0  # recommended addition for performance
   flutter_cache_manager: ^3.4.1
+  flutter_dotenv: ^5.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -94,3 +96,8 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/app_logo_512_preview.png"
+  min_sdk_android: 21

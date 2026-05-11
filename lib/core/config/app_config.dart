@@ -1,17 +1,17 @@
-class AppConfig {
-  static const String geminiApiKey = String.fromEnvironment(
-    'GEMINI_API_KEY',
-    defaultValue: 'AIzaSyCUsx5OlxOiMEeBURGefvfnR1AoThJqxOA',
-  );
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-  static const String geminiModel = String.fromEnvironment(
-    'GEMINI_MODEL',
-    defaultValue: 'gemini-2.5-flash-lite',
-  );
+class AppConfig {
+  static String get geminiApiKey =>
+      dotenv.env['GEMINI_API_KEY'] ?? '';
+
+  static String get geminiModel =>
+      dotenv.env['GEMINI_MODEL'] ?? 'gemini-2.5-flash-lite';
 
   static bool get hasValidGeminiKey {
-    return geminiApiKey.trim().isNotEmpty &&
-        !geminiApiKey.contains('YOUR_') &&
-        geminiApiKey.startsWith('AIza');
+    final key = geminiApiKey.trim();
+
+    return key.isNotEmpty &&
+        !key.contains('YOUR_') &&
+        key.length > 20;
   }
 }
