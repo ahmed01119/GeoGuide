@@ -265,7 +265,12 @@ Enable Firestore Database
 
 - Weather API
 - Gemini AI API
-- Location Services API
+- unsplash API
+- pexels API
+- wikipedia API
+- nominatim API
+- overpass API
+- OSM API
 # 📂 Project Structure
 
 ```text
