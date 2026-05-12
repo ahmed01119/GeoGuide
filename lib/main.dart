@@ -115,7 +115,11 @@ Future<void> main() async {
     await CacheHelper.saveData(key: 'seeded', value: true);
   }
   FlutterNativeSplash.remove();
+  try {
   await dotenv.load(fileName: ".env");
+} catch (e) {
+  debugPrint("Could not load .env: $e");
+}
   runApp(
     MultiBlocProvider(
       providers: [

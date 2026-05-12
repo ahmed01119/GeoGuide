@@ -26,6 +26,31 @@ class _ProfileState extends State<Profile> {
     context.read<UserCubit>().getProfile();
   }
 
+  double _horizontalPadding(double width) {
+    if (width >= 1200) return 56;
+    if (width >= 900) return 40;
+    if (width >= 600) return 28;
+    return 16;
+  }
+
+  double _appBarHeight(double width) {
+    if (width >= 900) return 360;
+    if (width >= 600) return 330;
+    return 280;
+  }
+
+  double _statsCardWidth(double availableWidth) {
+    if (availableWidth >= 1100) {
+      return (availableWidth - 24) / 3;
+    }
+
+    if (availableWidth >= 700) {
+      return (availableWidth - 12) / 2;
+    }
+
+    return availableWidth;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -43,7 +68,7 @@ class _ProfileState extends State<Profile> {
             curr is GetProfileFailure,
         builder: (context, state) {
           if (state is GetProfileLoading) {
-            return SafeArea(
+            return const SafeArea(
               child: Center(
                 child: CircularProgressIndicator(
                   color: Color(0xFF8D6E63),
@@ -110,6 +135,7 @@ class _ProfileState extends State<Profile> {
 
           if (state is GetProfileSuccess) {
             const themeBg = Color(0xFFF7F1EB);
+
             final user = UserModel(
               id: 0,
               name: state.name.isNotEmpty ? state.name : 'No Name',
@@ -121,234 +147,255 @@ class _ProfileState extends State<Profile> {
               favorites: 0,
             );
 
-            return CustomScrollView(
-              physics: const BouncingScrollPhysics(),
-              slivers: [
-                SliverAppBar(
-                  expandedHeight: 280,
-                  pinned: true,
-                  stretch: true,
-                  title: Center(
-                    child: Text(
-                                              'My Profile',
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 25,
-                                                fontWeight: FontWeight.w700,
-                                                letterSpacing: .4,
-                                              ),
-                                            ),
-                  ),
-                  actions: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 16),
-                      child: _GlassIconButton(
-                        icon: Icons.edit_rounded,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => BlocProvider.value(
-                                value: context.read<UserCubit>(),
-                                child: const Settings(),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                  backgroundColor: AppColors.chestnutBrown,
-                  shape: const RoundedRectangleBorder(
-                    borderRadius: BorderRadius.vertical(
-                      bottom: Radius.circular(30),
-                    ),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  leading: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: _GlassIconButton(
-                      icon: Icons.arrow_back_ios_new_rounded,
-                      onTap: () => Navigator.pop(context),
-                    ),
-                  ),
-                  flexibleSpace: FlexibleSpaceBar(
-                    background: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        Container(
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                              colors: [
-                                AppColors.chestnutBrown,
-                              ],
-                            ),
-                          ),
-                        ),
-                        Positioned.fill(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.transparent,
-                                  Colors.transparent,
-                                  Colors.transparent,
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final screenWidth = constraints.maxWidth;
+                final pagePadding = _horizontalPadding(screenWidth);
 
-                                ],
-                              ),
-                            ),
-                          ),
+                return CustomScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  slivers: [
+                    SliverAppBar(
+                      expandedHeight: _appBarHeight(screenWidth),
+                      pinned: true,
+                      stretch: true,
+                      centerTitle: true,
+                      title: const Text(
+                        'My Profile',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .4,
                         ),
-                        Positioned(
-                          left: 16,
-                          right: 16,
-                          bottom: 22,
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(24),
-                            child: BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                              child: Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.14),
-                                  borderRadius: BorderRadius.circular(24),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.22),
+                      ),
+                      actions: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 16),
+                          child: _GlassIconButton(
+                            icon: Icons.edit_rounded,
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => BlocProvider.value(
+                                    value: context.read<UserCubit>(),
+                                    child: const Settings(),
                                   ),
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    
-                                    
-                                    UserProfileHeader(
-                                      user: user,
-                                      imageUrl: state.imageUrl,
-                                    ),
-
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                      backgroundColor: AppColors.chestnutBrown,
+                      shape: const RoundedRectangleBorder(
+                        borderRadius: BorderRadius.vertical(
+                          bottom: Radius.circular(30),
+                        ),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      leading: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: _GlassIconButton(
+                          icon: Icons.arrow_back_ios_new_rounded,
+                          onTap: () => Navigator.pop(context),
+                        ),
+                      ),
+                      flexibleSpace: FlexibleSpaceBar(
+                        background: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Container(
+                              decoration: const BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    AppColors.chestnutBrown,
+                                    AppColors.chestnutBrown,
                                   ],
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                SliverToBoxAdapter(
-                  child: Transform.translate(
-                    offset: const Offset(0, -1),
-                    child: Container(
-                      decoration: const BoxDecoration(
-                        color: themeBg,
-                        borderRadius: BorderRadius.vertical(
-                          top: Radius.circular(30),
-                        ),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Personal Information',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF2E251F),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              'View your saved account details.',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF81756C),
-                                height: 1.5,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
+                            Positioned(
+                              left: pagePadding,
+                              right: pagePadding,
+                              bottom: 22,
+                              child: ClipRRect(
                                 borderRadius: BorderRadius.circular(24),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.05),
-                                    blurRadius: 16,
-                                    offset: const Offset(0, 8),
+                                child: BackdropFilter(
+                                  filter: ImageFilter.blur(
+                                    sigmaX: 10,
+                                    sigmaY: 10,
                                   ),
-                                ],
-                              ),
-                              child: Column(
-                                children: [
-                                  UserStatsCard(
-                                    icon: Icons.person_rounded,
-                                    title: 'Name',
-                                    value: user.name,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.14),
+                                      borderRadius: BorderRadius.circular(24),
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.22),
+                                      ),
+                                    ),
+                                    child: UserProfileHeader(
+                                      user: user,
+                                      imageUrl: state.imageUrl,
+                                    ),
                                   ),
-                                  UserStatsCard(
-                                    icon: Icons.email_rounded,
-                                    title: 'Email',
-                                    value: user.email,
-                                  ),
-                                  UserStatsCard(
-                                    icon: Icons.phone_rounded,
-                                    title: 'Phone',
-                                    value: user.phoneNumber.isNotEmpty
-                                        ? user.phoneNumber
-                                        : 'Not set',
-                                  ),
-                                  UserStatsCard(
-                                    icon: Icons.flag_rounded,
-                                    title: 'Country',
-                                    value: user.country.isNotEmpty
-                                        ? user.country
-                                        : 'Not set',
-                                  ),
-                                  UserStatsCard(
-                                    icon: Icons.verified_user_rounded,
-                                    title: 'Role',
-                                    value: user.role,
-                                  ),
-                                  UserStatsCard(
-                                    icon: Icons.bookmark_rounded,
-                                    title: 'Saved AI Images',
-                                    value: 'View your saved results',
-                                    trailingIcon:
-                                        Icons.arrow_forward_ios_rounded,
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              const SavedAiImagesPage(),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 22),
-                           
                           ],
                         ),
                       ),
                     ),
-                  ),
-                ),
-              ],
+                    SliverToBoxAdapter(
+                      child: Transform.translate(
+                        offset: const Offset(0, -1),
+                        child: Container(
+                          width: double.infinity,
+                          decoration: const BoxDecoration(
+                            color: themeBg,
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(30),
+                            ),
+                          ),
+                          child: Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              pagePadding,
+                              18,
+                              pagePadding,
+                              30,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Personal Information',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF2E251F),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                const Text(
+                                  'View your saved account details.',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF81756C),
+                                    height: 1.5,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(24),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.05),
+                                        blurRadius: 16,
+                                        offset: const Offset(0, 8),
+                                      ),
+                                    ],
+                                  ),
+                                  child: LayoutBuilder(
+                                    builder: (context, cardConstraints) {
+                                      final cardWidth = _statsCardWidth(
+                                        cardConstraints.maxWidth,
+                                      );
+
+                                      return Wrap(
+                                        spacing: 12,
+                                        runSpacing: 12,
+                                        children: [
+                                          SizedBox(
+                                            width: cardWidth,
+                                            child: UserStatsCard(
+                                              icon: Icons.person_rounded,
+                                              title: 'Name',
+                                              value: user.name,
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: cardWidth,
+                                            child: UserStatsCard(
+                                              icon: Icons.email_rounded,
+                                              title: 'Email',
+                                              value: user.email,
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: cardWidth,
+                                            child: UserStatsCard(
+                                              icon: Icons.phone_rounded,
+                                              title: 'Phone',
+                                              value: user.phoneNumber.isNotEmpty
+                                                  ? user.phoneNumber
+                                                  : 'Not set',
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: cardWidth,
+                                            child: UserStatsCard(
+                                              icon: Icons.flag_rounded,
+                                              title: 'Country',
+                                              value: user.country.isNotEmpty
+                                                  ? user.country
+                                                  : 'Not set',
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: cardWidth,
+                                            child: UserStatsCard(
+                                              icon:
+                                                  Icons.verified_user_rounded,
+                                              title: 'Role',
+                                              value: user.role,
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: cardWidth,
+                                            child: UserStatsCard(
+                                              icon: Icons.bookmark_rounded,
+                                              title: 'Saved AI Images',
+                                              value: 'View your saved results',
+                                              trailingIcon: Icons
+                                                  .arrow_forward_ios_rounded,
+                                              onTap: () {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        const SavedAiImagesPage(),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 22),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             );
           }
 
-          return SafeArea(
+          return const SafeArea(
             child: Center(
               child: CircularProgressIndicator(
                 color: Color(0xFF8D6E63),
