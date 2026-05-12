@@ -2,7 +2,7 @@
 ### Smart Tourism & Travel Mobile Application
 
 <p align="center">
-  <img src="assets\images\welcome.PNG" width="120"/>
+  <img src="assets\images\welcome.PNG" width="420"/>
 </p>
 
 <p align="center">
