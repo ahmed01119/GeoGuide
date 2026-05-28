@@ -20,34 +20,6 @@ class _PlaceCardState extends State<PlaceCard> {
   final PlaceRepository _repo = AppInjector.repository;
   final LandmarkCache _cache = LandmarkCache.instance;
 
-  /// Returns the freshest available image — prefers cache (may have been
-  /// enriched since the list was built), falls back to widget snapshot.
-  String get _imageUrl {
-    final source = _cache.get(widget.place.id) ?? widget.place;
-
-    if (source.imageUrl.trim().isNotEmpty &&
-        source.imageUrl.trim().startsWith('http')) {
-      return source.imageUrl.trim();
-    }
-
-    final list = source.mediaUrls
-        .map((u) => u.trim())
-        .where((u) => u.isNotEmpty && u.startsWith('http'))
-        .toList();
-
-    if (list.isNotEmpty) return list.first;
-
-    // hard fallback to widget data
-    if (widget.place.imageUrl.trim().isNotEmpty) {
-      return widget.place.imageUrl.trim();
-    }
-    final fb = widget.place.mediaUrls
-        .map((u) => u.trim())
-        .where((u) => u.isNotEmpty && u.startsWith('http'))
-        .toList();
-    return fb.isNotEmpty ? fb.first : '';
-  }
-
   Future<void> _precacheImages(BuildContext context, Landmark place) async {
     final urls = <String>[];
     final seen = <String>{};
@@ -69,19 +41,47 @@ class _PlaceCardState extends State<PlaceCard> {
     }
   }
 
-  Future<void> _openPlace(BuildContext context) async {
+  String _imageUrlFor(Landmark place) {
+    final source = _cache.get(place.id) ?? place;
+
+    if (source.imageUrl.trim().isNotEmpty &&
+        source.imageUrl.trim().startsWith('http')) {
+      return source.imageUrl.trim();
+    }
+
+    final list = source.mediaUrls
+        .map((u) => u.trim())
+        .where((u) => u.isNotEmpty && u.startsWith('http'))
+        .toList();
+
+    if (list.isNotEmpty) return list.first;
+
+    if (place.imageUrl.trim().isNotEmpty) {
+      return place.imageUrl.trim();
+    }
+
+    final fb = place.mediaUrls
+        .map((u) => u.trim())
+        .where((u) => u.isNotEmpty && u.startsWith('http'))
+        .toList();
+    return fb.isNotEmpty ? fb.first : '';
+  }
+
+  Future<void> _openPlace(BuildContext context, Landmark place) async {
+    final id = place.id.trim();
+
     // Use the freshest available data from cache
-    Landmark latest = _cache.get(widget.place.id) ?? widget.place;
+    Landmark latest = id.isNotEmpty ? (_cache.get(id) ?? place) : place;
 
     // Seed cache if missing
-    if (!_cache.has(widget.place.id)) {
-      _cache.put(widget.place);
+    if (id.isNotEmpty && !_cache.has(id)) {
+      _cache.put(place);
     }
 
     // Kick off a background fetch if cache is stale (non-blocking)
-    if (_cache.getFresh(widget.place.id) == null) {
+    if (id.isNotEmpty && _cache.getFresh(id) == null) {
       AppInjector.firebase
-          .getLandmarkById(widget.place.id)
+          .getLandmarkById(id)
           .then((fresh) {
         if (fresh != null) _cache.merge(fresh);
       }).catchError((_) {});
@@ -101,13 +101,14 @@ class _PlaceCardState extends State<PlaceCard> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildCard(BuildContext context, {required Landmark livePlace}) {
+    final imageUrl = _imageUrlFor(livePlace);
+
     return GestureDetector(
       onTapDown: (_) => setState(() => _scale = 0.96),
       onTapUp: (_) => setState(() => _scale = 1),
       onTapCancel: () => setState(() => _scale = 1),
-      onTap: () => _openPlace(context),
+      onTap: () => _openPlace(context, livePlace),
       child: AnimatedScale(
         scale: _scale,
         duration: const Duration(milliseconds: 150),
@@ -132,14 +133,14 @@ class _PlaceCardState extends State<PlaceCard> {
                 // Image
                 Positioned.fill(
                   child: Hero(
-                    tag: widget.place.id,
-                    child: _imageUrl.isEmpty
+                    tag: livePlace.id,
+                    child: imageUrl.isEmpty
                         ? Container(
                             color: Colors.grey.shade300,
                             child: const Icon(Icons.image_not_supported),
                           )
                         : Image.network(
-                            _imageUrl,
+                            imageUrl,
                             fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) => Container(
                               color: Colors.grey.shade300,
@@ -171,12 +172,12 @@ class _PlaceCardState extends State<PlaceCard> {
                   top: 10,
                   left: 10,
                   child: StreamBuilder<bool>(
-                    stream: _repo.favoriteStream(widget.place.id),
+                    stream: _repo.favoriteStream(livePlace.id),
                     builder: (context, snapshot) {
                       final isFav = snapshot.data ?? false;
                       return GestureDetector(
                         onTap: () async {
-                          await _repo.toggleFavorite(widget.place);
+                          await _repo.toggleFavorite(livePlace);
                         },
                         child: Container(
                           padding: const EdgeInsets.all(6),
@@ -197,7 +198,7 @@ class _PlaceCardState extends State<PlaceCard> {
                 ),
 
                 // Rating badge
-                if (widget.place.rating > 0)
+                if (livePlace.rating > 0)
                   Positioned(
                     top: 10,
                     right: 10,
@@ -214,7 +215,7 @@ class _PlaceCardState extends State<PlaceCard> {
                           const Icon(Icons.star, color: Colors.amber, size: 14),
                           const SizedBox(width: 4),
                           Text(
-                            widget.place.rating.toStringAsFixed(1),
+                            livePlace.rating.toStringAsFixed(1),
                             style: const TextStyle(
                                 color: Colors.white, fontSize: 12),
                           ),
@@ -232,7 +233,7 @@ class _PlaceCardState extends State<PlaceCard> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.place.name,
+                        livePlace.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -243,9 +244,9 @@ class _PlaceCardState extends State<PlaceCard> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        widget.place.address.isNotEmpty
-                            ? widget.place.address
-                            : widget.place.city,
+                        livePlace.address.isNotEmpty
+                            ? livePlace.address
+                            : livePlace.city,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -263,4 +264,23 @@ class _PlaceCardState extends State<PlaceCard> {
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final id = widget.place.id.trim();
+
+    if (id.isEmpty) {
+      // If we can't stream, keep using the provided widget snapshot.
+      return _buildCard(context, livePlace: widget.place);
+    }
+
+    return StreamBuilder<Landmark>(
+      stream: _repo.streamLandmark(id),
+      builder: (context, snapshot) {
+        final livePlace = snapshot.data ?? widget.place;
+        return _buildCard(context, livePlace: livePlace);
+      },
+    );
+  }
 }
+

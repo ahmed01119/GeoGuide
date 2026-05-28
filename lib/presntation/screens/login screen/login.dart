@@ -47,7 +47,7 @@ class _LoginState extends State<Login> {
                 content: Text(state.message),
               ),
             );
-            Navigator.push(
+            Navigator.pushAndRemoveUntil(
               context,
               MaterialPageRoute(
                 builder: (context) => BlocProvider.value(
@@ -55,6 +55,7 @@ class _LoginState extends State<Login> {
                   child: const Home(),
                 ),
               ),
+              (route) => false,
             );
           } else if (state is LoginInFailure) {
             ScaffoldMessenger.of(context).showSnackBar(

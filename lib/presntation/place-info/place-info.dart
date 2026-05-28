@@ -13,10 +13,11 @@ import 'dart:async';
 // ignore_for_file: avoid_print
 
 import 'dart:ui';
+import 'package:flutter/services.dart';
 import 'package:geoguide/services/firebase_nearby_cache_extension.dart';
 import 'package:geoguide/services/nearby-service.dart';
 import 'package:geoguide/constants/app_colors.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:geoguide/constants/app_injector.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -244,7 +245,7 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
     for (final u in _place.mediaUrls) add(u);
 
     // Do NOT add generic fallback photos here. If there are no real images,
-    // _PremiumImageCarousel will show the neutral placeholder.
+    // The responsive header carousel will show the neutral placeholder.
     _gallery = urls.take(6).toList();
   }
 
@@ -275,7 +276,6 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
 
     final shouldRefreshImages = _repo.needsImageRefresh(id);
     final shouldRefreshWiki = _repo.needsWikiRefresh(id);
-    final shouldRefreshNearby = _repo.needsNearbyRefresh(id);
 
     if (shouldRefreshImages && _gallery.length < 3) {
       setState(() => _loadingImages = true);
@@ -294,10 +294,6 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
       await _repo.enrichWikipedia(_place);
     }
     if (mounted) setState(() => _loadingWiki = false);
-
-    if (shouldRefreshNearby) {
-      await _repo.enrichNearby(_place);
-    }
   }
 
   Future<void> _toggleWishlist() async {
@@ -342,11 +338,29 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
         slivers: [
           SliverAppBar(
             expandedHeight: expandedHeight,
+            toolbarHeight: 72,
             pinned: true,
             stretch: true,
-            backgroundColor: _kBrown,
+            backgroundColor: AppColors.chestnutBrown,
+            surfaceTintColor: AppColors.chestnutBrown,
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            systemOverlayStyle: const SystemUiOverlayStyle(
+              statusBarColor: AppColors.chestnutBrown,
+              statusBarIconBrightness: Brightness.light,
+              statusBarBrightness: Brightness.dark,
+              systemNavigationBarColor: _kBg,
+              systemNavigationBarIconBrightness: Brightness.dark,
+            ),
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(
+                bottom: Radius.circular(30),
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
+            leadingWidth: 64,
             leading: Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.only(left: 12, top: 8, bottom: 8),
               child: _GlassIconButton(
                 icon: Icons.arrow_back_ios_new_rounded,
                 onTap: () => Navigator.pop(context),
@@ -354,7 +368,7 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
             ),
             actions: [
               Padding(
-                padding: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.only(right: 4, top: 8, bottom: 8),
                 child: StreamBuilder<bool>(
                   stream: _repo.favoriteStream(_place.id),
                   builder: (context, snap) {
@@ -370,7 +384,7 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.only(right: 12, top: 8, bottom: 8),
                 child: StreamBuilder<bool>(
                   stream: _repo.visitedStream(_place.id),
                   builder: (context, snap) {
@@ -387,128 +401,163 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
               ),
             ],
             flexibleSpace: FlexibleSpaceBar(
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _PremiumImageCarousel(
-                    urls: _gallery,
-                    heroTag: 'place_info_${_place.id}',
-                  ),
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
+              collapseMode: CollapseMode.pin,
+              background: LayoutBuilder(
+                builder: (context, headerConstraints) {
+                  final headerWidth = headerConstraints.maxWidth;
+                  final cardHorizontalPadding = isTablet ? 32.0 : 20.0;
+                  final cardRightSafeSpace = isTablet ? 132.0 : 112.0;
+                  final maxCardWidth = headerWidth >= 900
+                      ? 980.0
+                      : headerWidth - cardHorizontalPadding - cardRightSafeSpace;
+                  final cardWidth = maxCardWidth.clamp(260.0, headerWidth).toDouble();
+
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Container(
+                        decoration: const BoxDecoration(
                           gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                             colors: [
-                              Colors.black.withOpacity(0.18),
-                              Colors.black.withOpacity(0.04),
-                              Colors.black.withOpacity(0.62),
+                              AppColors.chestnutBrown,
+                              AppColors.chestnutBrown,
                             ],
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 20,
-                    right: isTablet ? 120 : 86,
-                    bottom: 16,
-                    child: IgnorePointer(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(20),
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                          child: Container(
-                            padding: EdgeInsets.all(isTablet ? 18 : 14),
+                      _PlaceInfoHeaderCarousel(
+                        urls: _gallery,
+                        heroTag: 'place_info_${_place.id}',
+                      ),
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.13),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.20),
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Wrap(
-                                  spacing: 6,
-                                  runSpacing: 6,
-                                  children: [
-                                    if (_place.category.isNotEmpty)
-                                      _HeroPill(
-                                        icon: Icons.category_rounded,
-                                        label: _place.category.toUpperCase(),
-                                      ),
-                                    if (_place.city.isNotEmpty)
-                                      _HeroPill(
-                                        icon: Icons.location_on_rounded,
-                                        label: _place.city,
-                                      ),
-                                    StreamBuilder<double>(
-                                      stream:
-                                          _repo.averageRatingStream(_place.id),
-                                      builder: (ctx, snap) {
-                                        final avg = snap.data ?? _place.rating;
-                                        if (avg <= 0) {
-                                          return const SizedBox.shrink();
-                                        }
-                                        return _HeroPill(
-                                          icon: Icons.star_rounded,
-                                          label: avg.toStringAsFixed(1),
-                                        );
-                                      },
-                                    ),
-                                    if (_place.lat != 0 && _place.lng != 0)
-                                      PlaceWeatherChip(
-                                        lat: _place.lat,
-                                        lng: _place.lng,
-                                        textColor: Colors.white,
-                                        backgroundColor:
-                                            Colors.white.withOpacity(0.14),
-                                        iconSize: 13,
-                                        fontSize: 11.5,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 6,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  _place.name,
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: isTablet ? 28 : 24,
-                                    height: 1.15,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                if (_place.shortDescription.isNotEmpty) ...[
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    _place.shortDescription,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(0.92),
-                                      fontSize: isTablet ? 14 : 13,
-                                      height: 1.45,
-                                    ),
-                                  ),
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                stops: const [0.0, 0.50, 0.78, 1.0],
+                                colors: [
+                                  Colors.black.withOpacity(0.02),
+                                  Colors.black.withOpacity(0.04),
+                                  AppColors.chestnutBrown.withOpacity(0.18),
+                                  AppColors.chestnutBrown.withOpacity(0.46),
                                 ],
-                              ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                ],
+                      Positioned(
+                        left: cardHorizontalPadding,
+                        bottom: isTablet ? 28 : 22,
+                        width: cardWidth,
+                        child: IgnorePointer(
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(24),
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                              child: Container(
+                                padding: EdgeInsets.all(isTablet ? 18 : 14),
+                                decoration: BoxDecoration(
+                                  color: AppColors.chestnutBrown.withOpacity(0.42),
+                                  borderRadius: BorderRadius.circular(24),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.20),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.10),
+                                      blurRadius: 18,
+                                      offset: const Offset(0, 8),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 6,
+                                      children: [
+                                        if (_place.category.isNotEmpty)
+                                          _HeroPill(
+                                            icon: Icons.category_rounded,
+                                            label: _place.category.toUpperCase(),
+                                          ),
+                                        if (_place.city.isNotEmpty)
+                                          _HeroPill(
+                                            icon: Icons.location_on_rounded,
+                                            label: _place.city,
+                                          ),
+                                        StreamBuilder<double>(
+                                          stream:
+                                              _repo.averageRatingStream(_place.id),
+                                          builder: (ctx, snap) {
+                                            final avg = snap.data ?? _place.rating;
+                                            if (avg <= 0) {
+                                              return const SizedBox.shrink();
+                                            }
+                                            return _HeroPill(
+                                              icon: Icons.star_rounded,
+                                              label: avg.toStringAsFixed(1),
+                                            );
+                                          },
+                                        ),
+                                        if (_place.lat != 0 && _place.lng != 0)
+                                          PlaceWeatherChip(
+                                            lat: _place.lat,
+                                            lng: _place.lng,
+                                            textColor: Colors.white,
+                                            backgroundColor:
+                                                Colors.white.withOpacity(0.14),
+                                            iconSize: 13,
+                                            fontSize: 11.5,
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 6,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      _place.name,
+                                      maxLines: isTablet ? 2 : 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: isTablet ? 30 : 24,
+                                        height: 1.15,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    if (_place.shortDescription.isNotEmpty) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _place.shortDescription,
+                                        maxLines: isTablet ? 2 : 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.92),
+                                          fontSize: isTablet ? 14 : 13,
+                                          height: 1.45,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -732,6 +781,369 @@ class _PlaceInfoScreenState extends State<PlaceInfoScreen>
     final main = place.imageUrl.trim();
     if (main.isNotEmpty && !urls.contains(main)) urls.insert(0, main);
     return urls;
+  }
+}
+
+
+class _PlaceInfoHeaderCarousel extends StatefulWidget {
+  final List<String> urls;
+  final String heroTag;
+
+  const _PlaceInfoHeaderCarousel({
+    required this.urls,
+    required this.heroTag,
+  });
+
+  @override
+  State<_PlaceInfoHeaderCarousel> createState() => _PlaceInfoHeaderCarouselState();
+}
+
+class _PlaceInfoHeaderCarouselState extends State<_PlaceInfoHeaderCarousel> {
+  late final PageController _controller;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PageController();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlaceInfoHeaderCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.urls.length != oldWidget.urls.length && _index >= widget.urls.length) {
+      _index = widget.urls.isEmpty ? 0 : widget.urls.length - 1;
+      if (_controller.hasClients && widget.urls.isNotEmpty) {
+        _controller.jumpToPage(_index);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int next) {
+    if (widget.urls.length <= 1) return;
+    final target = next.clamp(0, widget.urls.length - 1).toInt();
+    _controller.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _openViewer() {
+    if (widget.urls.isEmpty) return;
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        opaque: false,
+        barrierColor: Colors.black.withOpacity(0.88),
+        pageBuilder: (_, __, ___) => _PlaceInfoImageViewer(
+          urls: widget.urls,
+          initialIndex: _index,
+          heroTag: widget.heroTag,
+        ),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.urls.isEmpty) {
+      return Container(
+        color: AppColors.chestnutBrown,
+        alignment: Alignment.center,
+        child: Icon(
+          Icons.image_not_supported_outlined,
+          size: 44,
+          color: Colors.white.withOpacity(0.32),
+        ),
+      );
+    }
+
+    final showControls = widget.urls.length > 1;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Hero(
+          tag: widget.heroTag,
+          child: Material(
+            color: Colors.transparent,
+            child: PageView.builder(
+              controller: _controller,
+              itemCount: widget.urls.length,
+              onPageChanged: (value) => setState(() => _index = value),
+              itemBuilder: (context, index) {
+                final url = widget.urls[index];
+                    return GestureDetector(
+                  onTap: _openViewer,
+                  child: Image.network(
+                    url,
+                    key: ValueKey(
+                      '${widget.heroTag}_$url',
+                    ),
+                    fit: BoxFit.cover,
+                    headers: const {'User-Agent': 'GeoGuide-App'},
+                    errorBuilder: (_, __, ___) => Container(
+                      color: AppColors.chestnutBrown,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        size: 42,
+                        color: Colors.white.withOpacity(0.35),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        if (showControls) ...[
+          Positioned(
+            left: 14,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: _HeaderArrowButton(
+                icon: Icons.chevron_left_rounded,
+                enabled: _index > 0,
+                onTap: () => _goTo(_index - 1),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 14,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: _HeaderArrowButton(
+                icon: Icons.chevron_right_rounded,
+                enabled: _index < widget.urls.length - 1,
+                onTap: () => _goTo(_index + 1),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 18,
+            bottom: 14,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white.withOpacity(0.18)),
+              ),
+              child: Text(
+                '${_index + 1}/${widget.urls.length}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _PlaceInfoImageViewer extends StatefulWidget {
+  final List<String> urls;
+  final int initialIndex;
+  final String heroTag;
+
+  const _PlaceInfoImageViewer({
+    required this.urls,
+    required this.initialIndex,
+    required this.heroTag,
+  });
+
+  @override
+  State<_PlaceInfoImageViewer> createState() => _PlaceInfoImageViewerState();
+}
+
+class _PlaceInfoImageViewerState extends State<_PlaceInfoImageViewer> {
+  late final PageController _controller;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex.clamp(0, widget.urls.length - 1).toInt();
+    _controller = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int next) {
+    if (widget.urls.length <= 1) return;
+    final target = next.clamp(0, widget.urls.length - 1).toInt();
+    _controller.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showControls = widget.urls.length > 1;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.black,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.black.withOpacity(0.96),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Hero(
+                tag: widget.heroTag,
+                child: PageView.builder(
+                  controller: _controller,
+                  itemCount: widget.urls.length,
+                  onPageChanged: (value) => setState(() => _index = value),
+                  itemBuilder: (context, index) {
+                    return InteractiveViewer(
+                      minScale: 1,
+                      maxScale: 4,
+                      child: Center(
+                        child: Image.network(
+                          widget.urls[index],
+                          fit: BoxFit.contain,
+                          headers: const {'User-Agent': 'GeoGuide-App'},
+                          errorBuilder: (_, __, ___) => const Icon(
+                            Icons.broken_image_outlined,
+                            color: Colors.white54,
+                            size: 54,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Positioned(
+                top: 12,
+                left: 12,
+                child: _HeaderArrowButton(
+                  icon: Icons.close_rounded,
+                  enabled: true,
+                  onTap: () => Navigator.pop(context),
+                ),
+              ),
+              if (showControls) ...[
+                Positioned(
+                  left: 12,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _HeaderArrowButton(
+                      icon: Icons.chevron_left_rounded,
+                      enabled: _index > 0,
+                      onTap: () => _goTo(_index - 1),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 12,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _HeaderArrowButton(
+                      icon: Icons.chevron_right_rounded,
+                      enabled: _index < widget.urls.length - 1,
+                      onTap: () => _goTo(_index + 1),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  bottom: 18,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.white.withOpacity(0.18)),
+                      ),
+                      child: Text(
+                        '${_index + 1}/${widget.urls.length}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HeaderArrowButton extends StatelessWidget {
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _HeaderArrowButton({
+    required this.icon,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.35,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: Material(
+            color: Colors.white.withOpacity(0.16),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: enabled ? onTap : null,
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Icon(
+                  icon,
+                  color: Colors.white,
+                  size: 30,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -247,6 +247,18 @@ flutter pub get
 ```bash
 flutter run
 ```
+## Run on Web
+
+### VS Code
+Open Run and Debug, then select:
+
+GeoGuide Web - Edge Port 3000
+
+### Terminal - Windows
+
+```powershell
+.\run_web.ps1
+
 # 🔥 Firebase Setup
 
 The project uses Firebase services:

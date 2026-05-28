@@ -127,9 +127,20 @@ class _UserProfileHeaderState extends State<UserProfileHeader> {
 
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final compact = width < 380;
+    final avatarRadius = compact ? 42.0 : 48.0;
+    final horizontalGap = compact ? 16.0 : 24.0;
+    final nameSize = compact ? 20.0 : 22.0;
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 14 : 18,
+        compact ? 16 : 20,
+        compact ? 14 : 18,
+        compact ? 16 : 18,
+      ),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.12),
         borderRadius: BorderRadius.circular(24),
@@ -154,7 +165,7 @@ class _UserProfileHeaderState extends State<UserProfileHeader> {
                     ),
                   ),
                   child: CircleAvatar(
-                    radius: 48,
+                    radius: avatarRadius,
                     backgroundColor: const Color(0xFFF4ECE5),
                     backgroundImage: _getProfileImage(),
                   ),
@@ -214,18 +225,22 @@ class _UserProfileHeaderState extends State<UserProfileHeader> {
               ),
             ],
           ),
-          const SizedBox(width: 24),
+          SizedBox(width: horizontalGap),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   widget.user.name.isNotEmpty ? widget.user.name : 'No Name',
                   textAlign: TextAlign.start,
-                  style: const TextStyle(
-                    fontSize: 22,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: nameSize,
                     fontWeight: FontWeight.w800,
                     color: Colors.white,
+                    height: 1.15,
                   ),
                 ),
                 const SizedBox(height: 14),

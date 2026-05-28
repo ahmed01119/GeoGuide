@@ -268,22 +268,37 @@ extension _HomeSearchPlacesSection on _HomeState {
       );
 
   Widget _buildPlacesSection(List<Landmark> places) {
+    // Safety filter before rendering only.
+    // It does not touch Firebase, search, planner, sorting, scrolling, or app logic.
+    final List<Landmark> visiblePlaces = places.where((place) {
+      final hasName = place.name.trim().isNotEmpty;
+      if (!hasName) return false;
+
+      // All Egypt means no city filtering, only remove nameless cards.
+      if (_selectedCity == null) return true;
+
+      // Use the same strict city matcher from home_logic_sections.dart.
+      // This catches wrong Firebase city/cityId values for famous places
+      // like Cairo Tower being saved under Giza.
+      return _landmarkMatchesCity(place, _selectedCity!);
+    }).toList();
+
     if (_searching) return _loadingCard('Searching…');
-    if (_selectedCity != null && !_searchActive && places.isEmpty) {
+    if (_selectedCity != null && !_searchActive && visiblePlaces.isEmpty) {
       return _emptyStateCard(
         icon: Icons.location_city_outlined,
         title: 'No places found in this city yet',
         subtitle: 'Try refreshing later or choose another Egyptian city.',
       );
     }
-    if (_searchActive && places.isEmpty) {
+    if (_searchActive && visiblePlaces.isEmpty) {
       return _emptyStateCard(
         icon: Icons.search_off_rounded,
         title: 'No matching places found',
         subtitle: 'Try another place name, city, or category.',
       );
     }
-    if (!_searchActive && _selectedCity == null && places.isEmpty) {
+    if (!_searchActive && _selectedCity == null && visiblePlaces.isEmpty) {
       if (_homeLoading) {
         return _loadingCard('Finding the best places for you…');
       }
@@ -318,11 +333,12 @@ extension _HomeSearchPlacesSection on _HomeState {
         key: ValueKey(
           _searchActive ? 'search_$_correctedQuery' : _selectedCity?.id ?? 'all_egypt',
         ),
-        places: places,
+        places: visiblePlaces,
         scrollController: _scrollCtrl,
         onScrollLeft: _scrollLeft,
         onScrollRight: _scrollRight,
         canScrollLeft: _canScrollLeft,
+        selectedCity: _selectedCity?.name ?? 'All Egypt',
       ),
     );
   }

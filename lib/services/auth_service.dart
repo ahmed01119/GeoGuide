@@ -69,7 +69,11 @@ class AuthService {
       await _firestore
           .collection('users')
           .doc(refreshedUser.uid)
-          .set(newUser.toMap(), SetOptions(merge: true));
+          .set({
+        ...newUser.toMap(),
+        'role': 'user',
+        'isBlocked': false,
+      }, SetOptions(merge: true));
 
       // مهم: ما بنعملش signOut هنا
       // لأن VerifyEmailScreen الحالية معتمدة على currentUser
@@ -108,6 +112,16 @@ class AuthService {
         throw Exception(
           'Please verify your email before signing in. Check your inbox or resend the verification email.',
         );
+      }
+
+      final profileDoc =
+          await _firestore.collection('users').doc(refreshedUser.uid).get();
+      final blocked =
+          (profileDoc.data()?['isBlocked'] ?? false).toString().toLowerCase() ==
+              'true';
+      if (blocked) {
+        await _auth.signOut();
+        throw Exception('Your account is blocked. Contact support.');
       }
 
       return refreshedUser;
@@ -211,6 +225,13 @@ class AuthService {
       if (user == null) return null;
 
       final doc = await _firestore.collection('users').doc(user.uid).get();
+      final blocked =
+          (doc.data()?['isBlocked'] ?? false).toString().toLowerCase() ==
+              'true';
+      if (blocked) {
+        await _auth.signOut();
+        throw Exception('Your account is blocked. Contact support.');
+      }
 
       if (!doc.exists) {
         final newUser = UserModel(
@@ -222,10 +243,11 @@ class AuthService {
           createdAt: DateTime.now(),
         );
 
-        await _firestore
-            .collection('users')
-            .doc(user.uid)
-            .set(newUser.toMap(), SetOptions(merge: true));
+        await _firestore.collection('users').doc(user.uid).set({
+          ...newUser.toMap(),
+          'role': 'user',
+          'isBlocked': false,
+        }, SetOptions(merge: true));
 
         return newUser;
       }

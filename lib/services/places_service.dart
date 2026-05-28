@@ -10,16 +10,21 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:geoguide/services/firebase_service.dart';
 import 'package:geoguide/services/image-service.dart';
 import 'package:http/http.dart' as http;
 import 'package:geoguide/core/place_category_normalizer.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 
 class GooglePlacesService {
-  GooglePlacesService({ImageService? imageService})
-      : _imageService = imageService ?? ImageService();
+  GooglePlacesService({
+    ImageService? imageService,
+    FirebaseService? firebase,
+  })  : _imageService = imageService ?? ImageService(),
+        _firebase = firebase ?? FirebaseService();
 
   final ImageService _imageService;
+  final FirebaseService _firebase;
 
   // ── Curated landmark data per city ────────────────────────
   static const Map<String, List<Map<String, dynamic>>> _cityLandmarks = {
@@ -499,10 +504,23 @@ class GooglePlacesService {
     );
     final address = (place['address'] as String? ?? cityName).trim();
 
-    final mediaUrls = await _imageService.fetchImages(
+    final mediaRaw = await _imageService.fetchImages(
       name,
       cityName: cityName,
+      category: category,
       count: 7,
+    );
+    final metaBase =
+        '$name $cityName ${PlaceCategoryNormalizer.normalize(category, contextText: name)}';
+    final mediaUrls = await _imageService.filterPersistableImageUrls(
+      urls: mediaRaw,
+      placeName: name,
+      cityName: cityName,
+      category: category,
+      metaTextBase: metaBase,
+      findOwnersForImageUrl: _firebase.findLandmarkIdsWithImageUrl,
+      excludeLandmarkId: null,
+      maxCount: 7,
     );
 
     final imageUrl = mediaUrls.isNotEmpty ? mediaUrls.first : '';
@@ -638,10 +656,23 @@ class GooglePlacesService {
 
     if (existing.docs.isNotEmpty) return;
 
-    final mediaUrls = await _imageService.fetchImages(
+    final mediaRaw = await _imageService.fetchImages(
       name,
       cityName: cityName,
+      category: category,
       count: 7,
+    );
+    final metaBase =
+        '$name $cityName ${PlaceCategoryNormalizer.normalize(category, contextText: name)}';
+    final mediaUrls = await _imageService.filterPersistableImageUrls(
+      urls: mediaRaw,
+      placeName: name,
+      cityName: cityName,
+      category: category,
+      metaTextBase: metaBase,
+      findOwnersForImageUrl: _firebase.findLandmarkIdsWithImageUrl,
+      excludeLandmarkId: null,
+      maxCount: 7,
     );
     final imageUrl = mediaUrls.isNotEmpty ? mediaUrls.first : '';
 

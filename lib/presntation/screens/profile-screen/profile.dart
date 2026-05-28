@@ -7,6 +7,7 @@ import 'package:geoguide/cubit/user-state.dart';
 import 'package:geoguide/cubit/user_cubit.dart';
 import 'package:geoguide/models.dart/user-model.dart';
 import 'package:geoguide/presntation/screens/ai-image-details/saved_ai_images_page.dart';
+import 'package:geoguide/presntation/screens/admin/admin_dashboard.dart';
 import 'package:geoguide/presntation/screens/profile-screen/profile-widgets/user_profile_header.dart';
 import 'package:geoguide/presntation/screens/profile-screen/profile-widgets/user_stats_card.dart';
 import 'package:geoguide/presntation/screens/settings-screen/settings.dart';
@@ -34,9 +35,12 @@ class _ProfileState extends State<Profile> {
   }
 
   double _appBarHeight(double width) {
-    if (width >= 900) return 360;
-    if (width >= 600) return 330;
-    return 280;
+    // Keep enough vertical space between the top controls and the glass card.
+    // On small phones the old 280 height made the back/edit buttons visually
+    // overlap the profile glass card.
+    if (width >= 900) return 390;
+    if (width >= 600) return 370;
+    return 340;
   }
 
   double _statsCardWidth(double availableWidth) {
@@ -118,7 +122,7 @@ class _ProfileState extends State<Profile> {
                           backgroundColor: AppColors.chestnutBrown,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(16),
                           ),
                         ),
                         onPressed: () {
@@ -157,37 +161,10 @@ class _ProfileState extends State<Profile> {
                   slivers: [
                     SliverAppBar(
                       expandedHeight: _appBarHeight(screenWidth),
+                      toolbarHeight: 76,
                       pinned: true,
                       stretch: true,
-                      centerTitle: true,
-                      title: const Text(
-                        'My Profile',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 25,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: .4,
-                        ),
-                      ),
-                      actions: [
-                        Padding(
-                          padding: const EdgeInsets.only(right: 16),
-                          child: _GlassIconButton(
-                            icon: Icons.edit_rounded,
-                            onTap: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => BlocProvider.value(
-                                    value: context.read<UserCubit>(),
-                                    child: const Settings(),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
+                      automaticallyImplyLeading: false,
                       backgroundColor: AppColors.chestnutBrown,
                       shape: const RoundedRectangleBorder(
                         borderRadius: BorderRadius.vertical(
@@ -195,59 +172,106 @@ class _ProfileState extends State<Profile> {
                         ),
                       ),
                       clipBehavior: Clip.antiAlias,
-                      leading: Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: _GlassIconButton(
-                          icon: Icons.arrow_back_ios_new_rounded,
-                          onTap: () => Navigator.pop(context),
-                        ),
-                      ),
-                      flexibleSpace: FlexibleSpaceBar(
-                        background: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            Container(
-                              decoration: const BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    AppColors.chestnutBrown,
-                                    AppColors.chestnutBrown,
+                      flexibleSpace: LayoutBuilder(
+                        builder: (context, appBarConstraints) {
+                          final topInset = MediaQuery.of(context).padding.top;
+                          final currentHeight = appBarConstraints.biggest.height;
+                          final minVisibleHeight = topInset + 84;
+                          final expandedEnough = currentHeight > minVisibleHeight;
+
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Container(
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      AppColors.chestnutBrown,
+                                      AppColors.chestnutBrown,
+                                    ],
+                                  ),
+                                ),
+                              ),
+
+                              // Top controls are placed in their own safe area
+                              // layer, so they never sit on top of the profile
+                              // glass card.
+                              Positioned(
+                                top: topInset + 10,
+                                left: pagePadding,
+                                right: pagePadding,
+                                child: Row(
+                                  children: [
+                                    _GlassIconButton(
+                                      icon: Icons.arrow_back_ios_new_rounded,
+                                      onTap: () => Navigator.pop(context),
+                                    ),
+                                    const Expanded(
+                                      child: Text(
+                                        'My Profile',
+                                        textAlign: TextAlign.center,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 25,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: .4,
+                                        ),
+                                      ),
+                                    ),
+                                    _GlassIconButton(
+                                      icon: Icons.edit_rounded,
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => BlocProvider.value(
+                                              value: context.read<UserCubit>(),
+                                              child: const Settings(),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
                                   ],
                                 ),
                               ),
-                            ),
-                            Positioned(
-                              left: pagePadding,
-                              right: pagePadding,
-                              bottom: 22,
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(24),
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(
-                                    sigmaX: 10,
-                                    sigmaY: 10,
-                                  ),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.14),
-                                      borderRadius: BorderRadius.circular(24),
-                                      border: Border.all(
-                                        color: Colors.white.withOpacity(0.22),
+
+                              if (expandedEnough)
+                                Positioned(
+                                  left: pagePadding,
+                                  right: pagePadding,
+                                  bottom: 28,
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(26),
+                                    child: BackdropFilter(
+                                      filter: ImageFilter.blur(
+                                        sigmaX: 10,
+                                        sigmaY: 10,
                                       ),
-                                    ),
-                                    child: UserProfileHeader(
-                                      user: user,
-                                      imageUrl: state.imageUrl,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(16),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withOpacity(0.14),
+                                          borderRadius: BorderRadius.circular(26),
+                                          border: Border.all(
+                                            color: Colors.white.withOpacity(0.22),
+                                          ),
+                                        ),
+                                        child: UserProfileHeader(
+                                          user: user,
+                                          imageUrl: state.imageUrl,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          );
+                        },
                       ),
                     ),
                     SliverToBoxAdapter(
@@ -377,6 +401,25 @@ class _ProfileState extends State<Profile> {
                                               },
                                             ),
                                           ),
+                                          if (user.role.toLowerCase() == 'admin')
+                                            SizedBox(
+                                              width: cardWidth,
+                                              child: UserStatsCard(
+                                                icon: Icons.admin_panel_settings_rounded,
+                                                title: 'Admin Panel',
+                                                value: 'Open moderation and cleanup tools',
+                                                trailingIcon: Icons.arrow_forward_ios_rounded,
+                                                onTap: () {
+                                                  Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (_) =>
+                                                          const AdminDashboard(),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                            ),
                                         ],
                                       );
                                     },
@@ -425,15 +468,15 @@ class _GlassIconButton extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
         child: Material(
           color: Colors.white.withOpacity(0.14),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(16),
           child: InkWell(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
             onTap: onTap,
             child: Container(
-              width: 42,
-              height: 42,
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: Colors.white.withOpacity(0.20),
                 ),
@@ -441,7 +484,7 @@ class _GlassIconButton extends StatelessWidget {
               child: Icon(
                 icon,
                 color: Colors.white,
-                size: 18,
+                size: 20,
               ),
             ),
           ),

@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/constants/app_text.dart';
@@ -59,6 +60,9 @@ class Settings extends StatelessWidget {
             toolbarHeight: 66,
             leadingWidth: 72,
             backgroundColor: AppColors.chestnutBrown,
+            systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
+              statusBarColor: AppColors.chestnutBrown,
+            ),
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(
                 bottom: Radius.circular(30),
@@ -87,24 +91,24 @@ class Settings extends StatelessWidget {
                         end: Alignment.bottomRight,
                         colors: [
                           AppColors.chestnutBrown,
-                        
-
-
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),
                   ),
                   Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Colors.transparent,
-                            Colors.transparent,
-                          ],
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.white.withOpacity(0.04),
+                              Colors.white.withOpacity(0.02),
+                              Colors.black.withOpacity(0.06),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -127,7 +131,7 @@ class Settings extends StatelessWidget {
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.10),
+                                color: Colors.black.withOpacity(0.06),
                                 blurRadius: 16,
                                 offset: const Offset(0, 8),
                               ),

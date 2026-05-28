@@ -18,6 +18,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:geoguide/constants/constants.dart';
 import 'package:http/http.dart' as http;
 
@@ -500,7 +501,7 @@ class NearbyService {
   static DateTime? _overpassCooldownUntil;
   static DateTime? _nominatimCooldownUntil;
 
-  static const Duration _endpointTimeout = Duration(seconds: 10);
+  static const Duration _overpassHttpTimeout = Duration(seconds: 6);
   static const Duration _nominatimTimeout = Duration(seconds: 10);
   static const Duration _cooldownDuration = Duration(seconds: 45);
 
@@ -673,7 +674,9 @@ class NearbyService {
     required int limit,
   }) async {
     if (_isNominatimCoolingDown) {
-      print('[Nearby] Nominatim cooling down; skip text search.');
+      if (kDebugMode) {
+        debugPrint('[Nearby] Nominatim cooling down; skip text search.');
+      }
       return const [];
     }
 
@@ -708,7 +711,9 @@ class NearbyService {
           },
         ).timeout(_nominatimTimeout);
 
-        print('[Nearby] nominatim status=${response.statusCode} query=$q');
+        if (kDebugMode) {
+          debugPrint('[Nearby] nominatim status=${response.statusCode} query=$q');
+        }
 
         if (response.statusCode == 429 || response.statusCode == 503) {
           _startNominatimCooldown();
@@ -756,7 +761,9 @@ class NearbyService {
           if (seen.add(key)) collected.add(place);
         }
       } catch (e) {
-        print('[Nearby] nominatim failed query=$q error=$e');
+        if (kDebugMode) {
+          debugPrint('[Nearby] nominatim failed query=$q error=$e');
+        }
         // Do not stop all Nominatim text search after one slow query.
         // Try the next text query, then Overpass will still run after this.
         continue;
@@ -764,7 +771,9 @@ class NearbyService {
     }
 
     collected.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
-    print('[Nearby] nominatim total=${collected.length}');
+    if (kDebugMode) {
+      debugPrint('[Nearby] nominatim total=${collected.length}');
+    }
     return collected.take(limit).toList();
   }
 
@@ -849,25 +858,17 @@ class NearbyService {
     required int limit,
   }) async {
     if (_isOverpassCoolingDown) {
-      print('[Nearby] Overpass cooling down; skip live request.');
+      if (kDebugMode) {
+        debugPrint('[Nearby] Overpass cooling down; skip live request.');
+      }
       return const [];
     }
 
-    final onlyCafe = categories.length == 1 && categories.contains('cafe');
-
-    final onlyFood = categories.every(
-      (c) => c == 'cafe' || c == 'restaurant',
-    );
-
-    final radiusOptions = onlyCafe
-        ? <int>[2500, 5000, 8000, 12000]
-        : onlyFood
-            ? <int>[3000, 7000, 12000, 18000]
-            : <int>[3000, 7000, 12000, 20000, 30000];
+    // One radius per user action to avoid repeated Overpass timeouts.
+    final radiusOptions = <int>[5000];
 
     final collected = <NearbyPlace>[];
     final seen = <String>{};
-    int consecutiveFailures = 0;
 
     for (final radius in radiusOptions) {
       final fresh = await _fetchFromOverpass(
@@ -878,14 +879,10 @@ class NearbyService {
         limit: math.max(limit, 40),
       );
 
-      print(
-        '[Nearby] radius=$radius found=${fresh.length} totalBefore=${collected.length}',
-      );
-
-      if (fresh.isEmpty) {
-        consecutiveFailures++;
-      } else {
-        consecutiveFailures = 0;
+      if (kDebugMode) {
+        debugPrint(
+          '[Nearby] radius=$radius found=${fresh.length} totalBefore=${collected.length}',
+        );
       }
 
       for (final place in fresh) {
@@ -894,7 +891,9 @@ class NearbyService {
         if (seen.add(key)) collected.add(place);
       }
 
-      print('[Nearby] radius=$radius totalAfter=${collected.length}');
+      if (kDebugMode) {
+        debugPrint('[Nearby] radius=$radius totalAfter=${collected.length}');
+      }
 
       if (collected.length >= limit) break;
     }
@@ -926,7 +925,7 @@ class NearbyService {
     if (queries.isEmpty) return const [];
 
     final body = '''
-[out:json][timeout:14];
+[out:json][timeout:6];
 (
 ${queries.join('\n')}
 );
@@ -937,7 +936,7 @@ out center tags $limit;
     final globalSeen = <String>{};
     int endpointFailures = 0;
 
-    for (final endpoint in _overpassEndpoints) {
+    for (final endpoint in _overpassEndpoints.take(1)) {
       try {
         final res = await _client
             .post(
@@ -951,9 +950,11 @@ out center tags $limit;
               },
               body: {'data': body},
             )
-            .timeout(_endpointTimeout);
+            .timeout(_overpassHttpTimeout);
 
-        print('[Nearby] endpoint=$endpoint status=${res.statusCode}');
+        if (kDebugMode) {
+          debugPrint('[Nearby] endpoint=$endpoint status=${res.statusCode}');
+        }
 
         if (res.statusCode == 429 || res.statusCode == 504) {
           endpointFailures++;
@@ -968,7 +969,9 @@ out center tags $limit;
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         final elements = data['elements'] as List? ?? const [];
 
-        print('[Nearby] endpoint=$endpoint raw elements=${elements.length}');
+        if (kDebugMode) {
+          debugPrint('[Nearby] endpoint=$endpoint raw elements=${elements.length}');
+        }
 
         int acceptedCount = 0;
         int rejectedCount = 0;
@@ -1046,26 +1049,34 @@ out center tags $limit;
           allResults.add(place);
         }
 
-        print(
-          '[Nearby] accepted=$acceptedCount rejected=$rejectedCount '
-          'duplicates=$duplicateCount unnamed=$unnamedCount '
-          'invalidLocation=$invalidLocationCount total=${allResults.length}',
-        );
+        if (kDebugMode) {
+          debugPrint(
+            '[Nearby] accepted=$acceptedCount rejected=$rejectedCount '
+            'duplicates=$duplicateCount unnamed=$unnamedCount '
+            'invalidLocation=$invalidLocationCount total=${allResults.length}',
+          );
+        }
 
         if (allResults.isNotEmpty || elements.isNotEmpty) break;
       } catch (e) {
         endpointFailures++;
-        print('[Nearby] endpoint failed=$endpoint error=$e');
+        if (kDebugMode) {
+          debugPrint('[Nearby] endpoint failed=$endpoint error=$e');
+        }
       }
     }
 
-    if (allResults.isEmpty && endpointFailures >= _overpassEndpoints.length) {
-      print('[Nearby] all Overpass endpoints failed for this radius');
+    if (allResults.isEmpty && endpointFailures >= 1) {
+      if (kDebugMode) {
+        debugPrint('[Nearby] Overpass attempt failed for this radius');
+      }
     }
 
     allResults.sort((a, b) => _rankScore(b).compareTo(_rankScore(a)));
 
-    print('[Nearby] final from all endpoints=${allResults.length}');
+    if (kDebugMode) {
+      debugPrint('[Nearby] final overpass results=${allResults.length}');
+    }
 
     return allResults.take(limit).toList();
   }
@@ -1357,18 +1368,22 @@ out center tags $limit;
 
   static void _startOverpassCooldown() {
     _overpassCooldownUntil = DateTime.now().add(_cooldownDuration);
-    print(
-      '[Nearby] Overpass unavailable; cooling down live reload for '
-      '${_cooldownDuration.inSeconds}s',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[Nearby] Overpass unavailable; cooling down live reload for '
+        '${_cooldownDuration.inSeconds}s',
+      );
+    }
   }
 
   static void _startNominatimCooldown() {
     _nominatimCooldownUntil = DateTime.now().add(_cooldownDuration);
-    print(
-      '[Nearby] Nominatim unavailable; cooling down text search for '
-      '${_cooldownDuration.inSeconds}s',
-    );
+    if (kDebugMode) {
+      debugPrint(
+        '[Nearby] Nominatim unavailable; cooling down text search for '
+        '${_cooldownDuration.inSeconds}s',
+      );
+    }
   }
 
   static String _dedupeKey(NearbyPlace place) {

@@ -21,6 +21,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:geoguide/core/place_search_pipeline.dart';
+
 class _CandidateImage {
   final String url;
   final int score;
@@ -37,6 +39,9 @@ class _CandidateImage {
 
 class ImageService {
   static const int imagePipelineVersion = 21;
+
+  static bool _unsplashDisabledForSession = false;
+  static bool _pexelsDisabledForSession = false;
 
   static const String _pexelsApiKey = 'ZIquWI0rbO9moUylrWLfGPWjLslcTBX0Xgh1ehFUxj7NOaunRKZN6NJD';
   static const String _unsplashApiKey = 'nkwvpygXJCjwiekf9XHVUdeWhk32-S9-Uu2SD1nfuFg';
@@ -147,7 +152,9 @@ class ImageService {
       await _cacheManager.removeFile(clean);
       return null;
     } catch (e) {
-      debugPrint('[Image Cache ERROR] $e');
+      if (kDebugMode) {
+        debugPrint('[Image Cache ERROR] $e');
+      }
       _failedImageUrls.add(url.trim());
       try {
         await _cacheManager.removeFile(url.trim());
@@ -158,37 +165,76 @@ class ImageService {
 
   Future<List<String>> fetchImages(
     String placeName, {
+    String displayName = '',
     String cityName = '',
     String category = '',
     int count = 6,
     List<String> excludeUrls = const [],
+    bool forceRefresh = false,
   }) async {
     final originalPlace = placeName.trim();
-    final place = _englishPlaceAlias(originalPlace);
     final city = cityName.trim();
+    if (originalPlace.isEmpty) return [];
+
+    final dispRaw = displayName.trim();
+    if (PlaceSearchPipeline.isBrokenTransliterationName(originalPlace)) {
+      if (dispRaw.isEmpty ||
+          PlaceSearchPipeline.isBrokenTransliterationName(dispRaw)) {
+        if (kDebugMode) {
+          debugPrint('[Images] skip broken transliteration: $originalPlace');
+        }
+        return [];
+      }
+    }
+
+    final place = _englishPlaceAlias(originalPlace);
+    final dispAlias =
+        dispRaw.isNotEmpty ? _englishPlaceAlias(dispRaw) : '';
     String normalizedCategory = _normalizeCategory(category);
+
 
     if (_looksTouristByName(place)) {
       normalizedCategory = 'tourist';
     }
 
     final safeCount = count.clamp(1, 6);
-    debugPrint('[Images] start place=$place city=$city cat=$normalizedCategory');
-    debugPrint('[Images] keys: pexels=${_pexelsApiKey.isNotEmpty}, unsplash=${_unsplashApiKey.isNotEmpty}');
-
-    if (originalPlace.isEmpty) return [];
+    if (kDebugMode) {
+      debugPrint('[Images] start official=$place city=$city cat=$normalizedCategory');
+    }
 
     if (_isGenericBusinessImageTarget(place, normalizedCategory)) {
-      debugPrint('[Images] skipped generic business image target: $place');
-      _memoryCache['$originalPlace|$place|$city|$normalizedCategory|$safeCount|pipeline_v$imagePipelineVersion'.toLowerCase()] = const [];
+      if (kDebugMode) {
+        debugPrint('[Images] skipped generic business image target: $place');
+      }
+      final k =
+          '$originalPlace|$place|$city|$normalizedCategory|$safeCount|pipeline_v$imagePipelineVersion'
+              .toLowerCase();
+      _memoryCache[k] = const [];
       return const [];
     }
 
+    final dual = <String>[];
+    dual.add(city.isEmpty ? '$place Egypt' : '$place $city Egypt');
+    if (dispAlias.isNotEmpty &&
+        _normalizeText(dispAlias) != _normalizeText(place)) {
+      final q2 = city.isEmpty ? '$dispAlias Egypt' : '$dispAlias $city Egypt';
+      if (!dual.contains(q2)) dual.add(q2);
+    }
+    final fixedQueries = dual.take(2).toList();
+
     final cacheKey =
-        '$originalPlace|$place|$city|$normalizedCategory|$safeCount|pipeline_v$imagePipelineVersion'
+        '${fixedQueries.join('|')}|$normalizedCategory|$safeCount|pipeline_v$imagePipelineVersion'
             .toLowerCase();
-    if (_memoryCache.containsKey(cacheKey)) {
+
+    final cacheBypassed = forceRefresh;
+    if (!forceRefresh && _memoryCache.containsKey(cacheKey)) {
+      if (kDebugMode) {
+        debugPrint('[Images] forceRefresh=false cacheBypassed=false cacheHit=true key=$cacheKey');
+      }
       return _memoryCache[cacheKey]!;
+    }
+    if (kDebugMode && cacheBypassed) {
+      debugPrint('[Images] forceRefresh=true cacheBypassed=true key=$cacheKey');
     }
 
     final excludedKeys = excludeUrls.map(_dedupeKey).toSet();
@@ -205,69 +251,447 @@ class ImageService {
       }
     }
 
-    final futures = <Future<List<_CandidateImage>>>[
-      _fetchFromWikipediaCandidates(place, city, normalizedCategory),
-      _fetchFromCommonsCandidates(place, city, normalizedCategory),
-      _fetchFromPexelsCandidates(place, city, normalizedCategory),
-      _fetchFromUnsplashCandidates(place, city, normalizedCategory),
-    ];
+    final wiki = await _fetchFromWikipediaCandidates(
+      place,
+      city,
+      normalizedCategory,
+      fixedQueries: fixedQueries,
+    );
+    mergeCandidates(wiki);
 
-    final exactResults = await Future.wait(futures, eagerError: false);
-    mergeCandidates(exactResults[0]);
-    mergeCandidates(exactResults[1]);
-    mergeCandidates(exactResults[2]);
-    mergeCandidates(exactResults[3]);
+    final commons = await _fetchFromCommonsCandidates(
+      place,
+      city,
+      normalizedCategory,
+      fixedQueries: fixedQueries,
+    );
+    mergeCandidates(commons);
 
-    debugPrint('[Images] Wikipedia returned=${exactResults[0].length}');
-    debugPrint('[Images] Commons returned=${exactResults[1].length}');
-    debugPrint('[Images] Pexels exact returned=${exactResults[2].length}');
-    debugPrint('[Images] Unsplash exact returned=${exactResults[3].length}');
+    final wikiCount = wiki.length;
+    final commonsCount = commons.length;
 
-    // No generic fallback images: if the APIs cannot prove that the image
-    // belongs to the exact place, we return fewer images rather than wrong ones.
+    final skipStock = _shouldSkipStockPhotoApis(place, normalizedCategory);
+
+    final bool wikiCommonsZero = wikiCount == 0 && commonsCount == 0;
+
+    final bool safeFallbackAllowed = _isSafeOutingStockFallbackAllowed(
+      placeName: place,
+      city: city,
+      category: normalizedCategory,
+      contextText: '$place $city $normalizedCategory',
+    );
+
+    // Admin refresh images uses force=true upstream. We can't reliably detect
+    // that flag from here, but we only allow stock fallback when
+    // Wikipedia/Commons returns 0 AND the place looks safe for the chosen
+    // outing/tourist visual category.
+    final bool stockFallbackAllowedForZero =
+        normalizedCategory == 'outing' && wikiCommonsZero && safeFallbackAllowed;
+
+    if (kDebugMode) {
+      final stockFallbackReason = wikiCommonsZero && safeFallbackAllowed
+          ? 'wiki_commons_zero_safe_visual_outing'
+          : wikiCommonsZero
+              ? 'wiki_commons_zero_but_not_safe_visual_outing'
+              : 'wiki_commons_available_or_not_needed';
+
+      debugPrint(
+        '[Images] wiki=$wikiCount commons=$commonsCount '
+        'skipStock=$skipStock stockFallbackAllowed=$stockFallbackAllowedForZero '
+        'reason=$stockFallbackReason exactQueries=$fixedQueries',
+      );
+    }
+
+
+    final bool allowStockNow = !skipStock || stockFallbackAllowedForZero;
+
+    if (!allowStockNow && kDebugMode) {
+      debugPrint(
+        '[Images] skip Pexels/Unsplash for specific landmark context: $place ($normalizedCategory) stockFallbackUsed=false',
+      );
+    }
+
+    if (allowStockNow && kDebugMode) {
+      debugPrint('[Images] stockFallbackUsed=${stockFallbackAllowedForZero ? 'true' : 'false'}');
+    }
+
+    if (allowStockNow && !_pexelsDisabledForSession && fixedQueries.isNotEmpty) {
+      final px = await _fetchFromPexelsCandidates(
+        place,
+        city,
+        normalizedCategory,
+        useFallbackQueries: stockFallbackAllowedForZero,
+        fixedQueries: stockFallbackAllowedForZero ? null : fixedQueries,
+      );
+      mergeCandidates(px);
+    }
+
+    if (allowStockNow && !_unsplashDisabledForSession && fixedQueries.isNotEmpty) {
+      final us = await _fetchFromUnsplashCandidates(
+        place,
+        city,
+        normalizedCategory,
+        useFallbackQueries: stockFallbackAllowedForZero,
+        fixedQueries: stockFallbackAllowedForZero ? null : fixedQueries,
+      );
+      mergeCandidates(us);
+    }
+
+    if (kDebugMode) {
+      debugPrint(
+        '[Images] wiki=${wiki.length} commons=${commons.length} '
+        'skipStock=$skipStock pexelsOff=$_pexelsDisabledForSession '
+        'unsplashOff=$_unsplashDisabledForSession merged=${byKey.length}',
+      );
+    }
 
     final ranked = byKey.values.toList()
       ..sort((a, b) => b.score.compareTo(a.score));
 
     final trustedRanked = ranked
-        .where((e) => e.source == 'wikipedia' || e.source == 'wikimedia_commons' || e.score >= _minimumScoreForCategory(normalizedCategory, place))
+        .where((e) {
+          if (_isLikelyPortraitOrPeopleStockMeta(
+            meta: '${e.url} ${_metaHintForSource(e.source)}',
+            url: e.url,
+          )) {
+            if (kDebugMode) {
+              debugPrint('[Images] reject portrait-like candidate ${e.url} (${e.source})');
+            }
+            return false;
+          }
+          return e.source == 'wikipedia' ||
+              e.source == 'wikimedia_commons' ||
+              e.score >= _minimumScoreForCategory(normalizedCategory, place);
+        })
         .toList();
 
     final finalImages = sanitizeImages(
       trustedRanked.take(safeCount).map((e) => e.url).toList(),
     ).take(safeCount).toList();
 
-    debugPrint('[Images] FINAL returned=${finalImages.length} for $place');
-    _memoryCache[cacheKey] = finalImages;
+    if (kDebugMode) {
+      debugPrint('[Images] FINAL returned=${finalImages.length} for $place');
+    }
+    if (!forceRefresh) {
+      _memoryCache[cacheKey] = finalImages;
+    } else {
+      if (finalImages.isEmpty && kDebugMode) {
+        debugPrint('[Images] forceRefresh=true skipping cache for empty result key=$cacheKey');
+      }
+    }
     return finalImages;
+  }
+
+  String _metaHintForSource(String source) => source;
+
+  /// Prefer Wikipedia/Commons over stock APIs for named natural / heritage / dive sites.
+  bool _shouldSkipStockPhotoApis(String place, String category) {
+    final cat = _normalizeCategory(category);
+    final p = _normalizeText(place);
+    if (_isDiveReefMarinePlaceName(p)) return true;
+    if (cat == 'tourist' || cat == 'outing') {
+      if (_isGenericBusinessImageTarget(place, category)) return false;
+      if (_strongPlaceTokens(place).length >= 2) return true;
+      if (p.length >= 14) return true;
+    }
+    return false;
+  }
+
+  bool _isSafeOutingStockFallbackAllowed({
+    required String placeName,
+    required String city,
+    required String category,
+    String? contextText,
+  }) {
+    final cat = _normalizeCategory(category);
+    final text = _normalizeText('$placeName $city ${contextText ?? ''}');
+
+    if (cat != 'outing' && cat != 'tourist') return false;
+
+    const safeVisualTokens = [
+      'beach',
+      'bay',
+      'island',
+      'reef',
+      'diving',
+      'dive',
+      'snorkel',
+      'snorkeling',
+      'marina',
+      'park',
+      'garden',
+      'mall',
+      'promenade',
+      'corniche',
+      'resort',
+      'lake',
+      'oasis',
+      'lagoon',
+      'museum',
+      'landmark',
+      'temple',
+      'palace',
+      'castle',
+      'citadel',
+      'mosque',
+      'church',
+      'monastery',
+      'market',
+      'bazaar',
+      'entertainment',
+    ];
+
+    const unsafeTokens = [
+      'hospital',
+      'clinic',
+      'school',
+      'university',
+      'office',
+      'company',
+      'compound',
+      'residential',
+      'street',
+      'road',
+      'accident',
+      'attack',
+      'war',
+      'event',
+      'news',
+      'service',
+    ];
+
+    if (unsafeTokens.any(text.contains)) return false;
+    return safeVisualTokens.any(text.contains);
+  }
+
+  bool _allowSafeCategoryFallbackImage({
+    required String metaText,
+    required String place,
+    required String city,
+    required String category,
+  }) {
+    final cat = _normalizeCategory(category);
+    final text = _normalizeText('$metaText $city');
+    final cityNorm = _normalizeText(city);
+
+    if (cat != 'outing' && cat != 'tourist') return false;
+
+    if (_isLikelyPortraitOrPeopleStockMeta(meta: metaText, url: '')) {
+      return false;
+    }
+
+
+    final hasVisualSignal = _hasCategoryVisualSignal(text, cat) ||
+        _subtypeKeywords(_expectedSubtype(place, category))
+            .any(text.contains);
+
+    final hasLocationSignal =
+        (cityNorm.isNotEmpty && text.contains(cityNorm)) ||
+            text.contains('egypt') ||
+            text.contains('sea') ||
+            text.contains('beach') ||
+            text.contains('coast') ||
+            text.contains('red sea');
+
+    const bad = [
+      'hospital',
+      'clinic',
+      'school',
+      'office',
+      'company',
+      'street sign',
+      'traffic',
+      'logo',
+      'icon',
+      'map',
+      'screen',
+      'football',
+      'stadium',
+    ];
+
+    if (bad.any(text.contains)) return false;
+
+    return hasVisualSignal && hasLocationSignal;
+  }
+
+
+  bool _isDiveReefMarinePlaceName(String normalizedPlace) {
+    const hints = [
+      'reef', 'dive', 'diving', 'diver', 'snorkel', 'coral', 'shipwreck',
+      'wreck', 'blue hole',
+    ];
+    return hints.any(normalizedPlace.contains);
+  }
+
+  bool _isLikelyPortraitOrPeopleStockMeta({
+    required String meta,
+    required String url,
+  }) {
+    final m = '$meta ${url.toLowerCase()}'.toLowerCase();
+    const bad = [
+      'portrait', 'headshot', 'selfie', 'supermodel', 'fashion model',
+      'beauty portrait', 'woman portrait', 'man portrait', 'face close',
+      'closeup face', 'close-up face', 'studio portrait', 'model posing',
+      'attractive woman', 'beautiful woman', 'handsome man', 'girl portrait',
+      'boy portrait', 'profile picture', 'head shot',
+    ];
+    if (bad.any(m.contains)) return true;
+    if (m.contains('woman') && (m.contains('beauty') || m.contains('model'))) {
+      return true;
+    }
+    if (m.contains('man') && m.contains('portrait')) return true;
+    return false;
+  }
+
+  /// Called before persisting hero images — rejects unrelated / portrait stock.
+  bool validateImageCandidateForPlace({
+    required String url,
+    required String metaText,
+    required String placeName,
+    required String cityName,
+    required String category,
+  }) {
+    final clean = _canonicalImageUrl(url);
+    if (!_isValidImageUrl(clean) || isBadImageUrl(clean)) return false;
+    if (_isLikelyPortraitOrPeopleStockMeta(meta: metaText, url: clean)) {
+      if (kDebugMode) {
+        debugPrint('[Images] validate reject portrait-like: $placeName -> $clean');
+      }
+      return false;
+    }
+    final score = _imageConfidenceScore(
+      meta: metaText,
+      place: placeName,
+      city: cityName,
+      category: category,
+      fromWikipedia:
+          clean.contains('wikimedia.org') || clean.contains('wikipedia.org'),
+      isFallback: false,
+    );
+    final accepted = score >= _minimumScoreForCategory(category, placeName) &&
+        (_hasPlaceIdentityEvidence(metaText, placeName) ||
+            clean.contains('wikimedia.org') ||
+            clean.contains('wikipedia.org'));
+    if (kDebugMode) {
+      debugPrint(
+        '[Images] validate place=$placeName accepted=$accepted score=$score',
+      );
+    }
+    return accepted;
+  }
+
+  /// Filters [urls] for persistence: duplicate-owner check (Firestore) + [validateImageCandidateForPlace].
+  Future<List<String>> filterPersistableImageUrls({
+    required List<String> urls,
+    required String placeName,
+    required String cityName,
+    required String category,
+    required String metaTextBase,
+    required Future<List<String>> Function(String url) findOwnersForImageUrl,
+    String? excludeLandmarkId,
+    /// When non-null: if Firestore lists other landmark ids with this URL, this
+    /// may return true to allow sharing (same logical place / alias rows).
+    Future<bool> Function(String url, List<String> ownerIds)?
+        allowDuplicateOwnersForSamePlace,
+    int maxCount = 6,
+    bool allowSafeCategoryFallback = false,
+  }) async {
+    final out = <String>[];
+    final cap = maxCount.clamp(1, 12);
+    final ex = excludeLandmarkId?.trim();
+    final allowDup = allowDuplicateOwnersForSamePlace;
+    for (final raw in urls) {
+      final url = _canonicalImageUrl(raw);
+      if (url.isEmpty) continue;
+      final owners = await findOwnersForImageUrl(url);
+      final otherOwners = (ex == null || ex.isEmpty)
+          ? owners
+          : owners.where((id) => id != ex).toList();
+      final dupReject = otherOwners.isNotEmpty &&
+          (allowDup == null || !(await allowDup(url, owners)));
+      if (dupReject) {
+        if (kDebugMode) {
+          debugPrint('[Images] filterPersistable duplicate owner skip: $placeName -> $url');
+        }
+        continue;
+      }
+      final metaText = '$metaTextBase $url';
+
+      final exactValid = validateImageCandidateForPlace(
+        url: url,
+        metaText: metaText,
+        placeName: placeName,
+        cityName: cityName,
+        category: category,
+      );
+
+      if (!exactValid) {
+        if (allowSafeCategoryFallback) {
+          final fallbackValid = _allowSafeCategoryFallbackImage(
+            metaText: metaTextBase + ' ' + url,
+            place: placeName,
+            city: cityName,
+            category: category,
+          );
+
+          if (kDebugMode) {
+            debugPrint(
+              '[Images] persistFallbackAllowed=true persistFallbackAccepted=$fallbackValid url=$url place=$placeName city=$cityName cat=$category',
+            );
+          }
+
+          if (!fallbackValid) {
+            continue;
+          }
+        } else {
+          if (kDebugMode) {
+            debugPrint(
+              '[Images] persistFallbackAllowed=false persistFallbackAccepted=false reason=exact_validation_failed url=$url',
+            );
+          }
+          continue;
+        }
+      }
+
+      out.add(url);
+      if (out.length >= cap) break;
+    }
+    return out;
   }
 
   Future<List<String>> getImagesForPlace({
     required String placeName,
+    String? displayName,
     String? cityName,
     String category = '',
     int count = 6,
     List<String> excludeUrls = const [],
+    bool forceRefresh = false,
   }) async {
     return fetchImages(
       placeName,
+      displayName: displayName ?? '',
       cityName: cityName ?? '',
       category: category,
       count: count,
       excludeUrls: excludeUrls,
+      forceRefresh: forceRefresh,
     );
   }
 
   Future<List<_CandidateImage>> _fetchFromWikipediaCandidates(
     String place,
     String city,
-    String category,
-  ) async {
+    String category, {
+    List<String>? fixedQueries,
+  }) async {
     final candidates = <_CandidateImage>[];
     final seen = <String>{};
 
     try {
-      final queries = _queriesForPlace(place, city, category).take(2).toList();
+      final queries = (fixedQueries != null && fixedQueries.isNotEmpty)
+          ? fixedQueries.take(2).toList()
+          : _queriesForPlace(place, city, category).take(2).toList();
       for (final query in queries) {
         final uri = Uri.parse(
           'https://en.wikipedia.org/w/api.php'
@@ -332,7 +756,9 @@ class ImageService {
         }
       }
     } catch (e) {
-      debugPrint('[Wikipedia image ERROR] $e');
+      if (kDebugMode) {
+        debugPrint('[Wikipedia image ERROR] $e');
+      }
     }
 
     candidates.sort((a, b) => b.score.compareTo(a.score));
@@ -342,13 +768,16 @@ class ImageService {
   Future<List<_CandidateImage>> _fetchFromCommonsCandidates(
     String place,
     String city,
-    String category,
-  ) async {
+    String category, {
+    List<String>? fixedQueries,
+  }) async {
     final candidates = <_CandidateImage>[];
     final seen = <String>{};
 
     try {
-      final queries = _queriesForPlace(place, city, category).take(5).toList();
+      final queries = (fixedQueries != null && fixedQueries.isNotEmpty)
+          ? fixedQueries.take(2).toList()
+          : _queriesForPlace(place, city, category).take(2).toList();
 
       for (final query in queries) {
         if (candidates.length >= 10) break;
@@ -435,7 +864,9 @@ class ImageService {
         }
       }
     } catch (e) {
-      debugPrint('[Wikimedia Commons image ERROR] $e');
+      if (kDebugMode) {
+        debugPrint('[Wikimedia Commons image ERROR] $e');
+      }
     }
 
     candidates.sort((a, b) => b.score.compareTo(a.score));
@@ -447,7 +878,9 @@ class ImageService {
     String city,
     String category, {
     bool useFallbackQueries = false,
+    List<String>? fixedQueries,
   }) async {
+    if (_unsplashDisabledForSession) return const [];
     if (_unsplashApiKey.trim().isEmpty) return const [];
     final candidates = <_CandidateImage>[];
     final seen = <String>{};
@@ -455,9 +888,11 @@ class ImageService {
     try {
       final queries = useFallbackQueries
           ? _fallbackQueriesForCategory(place, city, category)
-          : _queriesForPlace(place, city, category);
+          : (fixedQueries != null && fixedQueries.isNotEmpty)
+              ? fixedQueries.take(1).toList()
+              : _queriesForPlace(place, city, category);
 
-      for (final query in queries.take(useFallbackQueries ? 2 : 4)) {
+      for (final query in queries.take(1)) {
         if (candidates.length >= 14) break;
 
         final url = Uri.parse(
@@ -477,8 +912,17 @@ class ImageService {
           },
         ).timeout(const Duration(seconds: 6));
 
-        debugPrint('[Unsplash] status=${res.statusCode} query=$query');
-        if (res.statusCode == 429) break;
+        if (kDebugMode) {
+          debugPrint('[Unsplash] status=${res.statusCode} query=$query');
+        }
+        if (res.statusCode == 403 || res.statusCode == 401) {
+          _unsplashDisabledForSession = true;
+          break;
+        }
+        if (res.statusCode == 429) {
+          _unsplashDisabledForSession = true;
+          break;
+        }
         if (res.statusCode != 200) continue;
 
         final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -511,12 +955,49 @@ class ImageService {
             isFallback: useFallbackQueries,
           );
 
-          // Stock APIs often return visually nice but unrelated city/category photos.
-          // Keep only results whose metadata proves the exact place identity.
-          if (!_hasPlaceIdentityEvidence(metaText, place)) continue;
+          final hasIdentity = _hasPlaceIdentityEvidence(metaText, place);
+          final allowCategoryFallback = useFallbackQueries &&
+              _allowSafeCategoryFallbackImage(
+                metaText: metaText,
+                place: place,
+                city: city,
+                category: category,
+              );
 
-          final threshold = _minimumScoreForCategory(category, place);
-          if (score < threshold) continue;
+          if (!hasIdentity && !allowCategoryFallback) {
+            if (kDebugMode) {
+              debugPrint(
+                '[Images] fallbackCandidate accepted=false source=unsplash '
+                'reason=missing_identity_fallback_blocked place=$place city=$city cat=$category isFallback=$useFallbackQueries',
+              );
+            }
+            continue;
+          }
+
+          final threshold = allowCategoryFallback
+              ? (_minimumScoreForCategory(category, place) - 18)
+              : _minimumScoreForCategory(category, place);
+          if (score < threshold) {
+            if (kDebugMode) {
+              debugPrint(
+                '[Images] fallbackCandidate accepted=false source=unsplash '
+                'reason=score_below_threshold score=$score threshold=$threshold '
+                'place=$place city=$city cat=$category isFallback=$useFallbackQueries allowCategoryFallback=$allowCategoryFallback',
+              );
+            }
+            continue;
+          }
+
+          if (kDebugMode) {
+            final accepted = hasIdentity || allowCategoryFallback;
+            final reason = hasIdentity
+                ? 'identity_evidence'
+                : 'safe_category_fallback';
+            debugPrint(
+              '[Images] fallbackCandidate accepted=$accepted source=unsplash '
+              'reason=$reason place=$place city=$city cat=$category isFallback=$useFallbackQueries allowCategoryFallback=$allowCategoryFallback',
+            );
+          }
 
           final key = _dedupeKey(img);
           if (seen.add(key)) {
@@ -530,7 +1011,7 @@ class ImageService {
         }
       }
     } catch (e) {
-      debugPrint('[Unsplash ERROR] $e');
+      if (kDebugMode) debugPrint('[Unsplash ERROR] $e');
     }
 
     candidates.sort((a, b) => b.score.compareTo(a.score));
@@ -542,7 +1023,9 @@ class ImageService {
     String city,
     String category, {
     bool useFallbackQueries = false,
+    List<String>? fixedQueries,
   }) async {
+    if (_pexelsDisabledForSession) return const [];
     if (_pexelsApiKey.trim().isEmpty) return const [];
     final candidates = <_CandidateImage>[];
     final seen = <String>{};
@@ -550,9 +1033,11 @@ class ImageService {
     try {
       final queries = useFallbackQueries
           ? _fallbackQueriesForCategory(place, city, category)
-          : _queriesForPlace(place, city, category);
+          : (fixedQueries != null && fixedQueries.isNotEmpty)
+              ? fixedQueries.take(1).toList()
+              : _queriesForPlace(place, city, category);
 
-      for (final q in queries.take(useFallbackQueries ? 2 : 4)) {
+      for (final q in queries.take(1)) {
         if (candidates.length >= 14) break;
 
         final url = Uri.parse(
@@ -572,8 +1057,17 @@ class ImageService {
           },
         ).timeout(const Duration(seconds: 6));
 
-        debugPrint('[Pexels] status=${res.statusCode} query=$q');
-        if (res.statusCode == 429) break;
+        if (kDebugMode) {
+          debugPrint('[Pexels] status=${res.statusCode} query=$q');
+        }
+        if (res.statusCode == 429) {
+          _pexelsDisabledForSession = true;
+          break;
+        }
+        if (res.statusCode == 403 || res.statusCode == 401) {
+          _pexelsDisabledForSession = true;
+          break;
+        }
         if (res.statusCode != 200) continue;
 
         final data = jsonDecode(res.body) as Map<String, dynamic>;
@@ -610,10 +1104,49 @@ class ImageService {
 
           // Stock APIs often return visually nice but unrelated city/category photos.
           // Keep only results whose metadata proves the exact place identity.
-          if (!_hasPlaceIdentityEvidence(metaText, place)) continue;
+          final hasIdentity = _hasPlaceIdentityEvidence(metaText, place);
+          final allowCategoryFallback = useFallbackQueries &&
+              _allowSafeCategoryFallbackImage(
+                metaText: metaText,
+                place: place,
+                city: city,
+                category: category,
+              );
 
-          final threshold = _minimumScoreForCategory(category, place);
-          if (score < threshold) continue;
+          if (!hasIdentity && !allowCategoryFallback) {
+            if (kDebugMode) {
+              debugPrint(
+                '[Images] fallbackCandidate accepted=false source=pexels '
+                'reason=missing_identity_fallback_blocked place=$place city=$city cat=$category isFallback=$useFallbackQueries allowCategoryFallback=$allowCategoryFallback',
+              );
+            }
+            continue;
+          }
+
+          final threshold = allowCategoryFallback
+              ? (_minimumScoreForCategory(category, place) - 18)
+              : _minimumScoreForCategory(category, place);
+          if (score < threshold) {
+            if (kDebugMode) {
+              debugPrint(
+                '[Images] fallbackCandidate accepted=false source=pexels '
+                'reason=score_below_threshold score=$score threshold=$threshold '
+                'place=$place city=$city cat=$category isFallback=$useFallbackQueries allowCategoryFallback=$allowCategoryFallback',
+              );
+            }
+            continue;
+          }
+
+          if (kDebugMode) {
+            final accepted = hasIdentity || allowCategoryFallback;
+            final reason = hasIdentity
+                ? 'identity_evidence'
+                : 'safe_category_fallback';
+            debugPrint(
+              '[Images] fallbackCandidate accepted=$accepted source=pexels '
+              'reason=$reason place=$place city=$city cat=$category isFallback=$useFallbackQueries allowCategoryFallback=$allowCategoryFallback',
+            );
+          }
 
           final key = _dedupeKey(img);
           if (seen.add(key)) {
@@ -627,7 +1160,7 @@ class ImageService {
         }
       }
     } catch (e) {
-      debugPrint('[Pexels ERROR] $e');
+      if (kDebugMode) debugPrint('[Pexels ERROR] $e');
     }
 
     candidates.sort((a, b) => b.score.compareTo(a.score));
@@ -679,6 +1212,13 @@ class ImageService {
       'landmark',
       'library',
       'tower',
+      'reef',
+      'dive',
+      'diving',
+      'coral',
+      'snorkel',
+      'shipwreck',
+      'wreck',
     ].any(p.contains);
   }
 
@@ -1040,6 +1580,10 @@ class ImageService {
     ];
     for (final bad in badSignals) {
       if (text.contains(bad)) score -= 22;
+    }
+
+    if (_isLikelyPortraitOrPeopleStockMeta(meta: meta, url: '')) {
+      score -= 200;
     }
 
     return score;

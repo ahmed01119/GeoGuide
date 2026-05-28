@@ -6,7 +6,6 @@ import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/constants/app_text.dart';
 import 'package:geoguide/cubit/user-state.dart';
 import 'package:geoguide/cubit/user_cubit.dart';
-import 'package:geoguide/presntation/screens/places-screen/places.dart';
 
 import '../../../../models.dart/landmark_model.dart';
 import 'place_card.dart';
@@ -18,6 +17,11 @@ class TopPlacesSection extends StatelessWidget {
   final VoidCallback onScrollRight;
   final bool canScrollLeft;
 
+  /// ✅ Optional so old calls will not break.
+  /// Pass the currently selected city name here.
+  /// Examples: "Giza", "Cairo", "Alexandria", "All Egypt".
+  final String? selectedCity;
+
   const TopPlacesSection({
     super.key,
     required this.places,
@@ -25,7 +29,32 @@ class TopPlacesSection extends StatelessWidget {
     required this.onScrollLeft,
     required this.onScrollRight,
     required this.canScrollLeft,
+    this.selectedCity,
   });
+
+  bool _hasValidName(Landmark place) {
+    return place.name.trim().isNotEmpty;
+  }
+
+  bool _isAllEgypt(String city) {
+    final normalized = city.trim().toLowerCase();
+    return normalized.isEmpty ||
+        normalized == 'all egypt' ||
+        normalized == 'egypt' ||
+        normalized == 'all' ||
+        normalized == 'all cities';
+  }
+
+  bool _sameCity(Landmark place, String currentCity) {
+    // City filtering is handled before this widget in Home, using the strict
+    // matcher from home_logic_sections.dart. Here we only keep compatibility
+    // with old calls and avoid hiding valid All Egypt cards.
+    return true;
+  }
+
+  List<Landmark> _filterValidPlaces(List<Landmark> sourcePlaces) {
+    return sourcePlaces.where(_hasValidName).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +64,8 @@ class TopPlacesSection extends StatelessWidget {
     if (userState is GetAllLandmarksSuccess) {
       allLandmarks = userState.landmarks;
     }
+
+    final filteredPlaces = _filterValidPlaces(places);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -67,8 +98,6 @@ class TopPlacesSection extends StatelessWidget {
                   ],
                 ),
               ),
-
-             
             ],
           ),
         ),
@@ -80,52 +109,59 @@ class TopPlacesSection extends StatelessWidget {
           height: 320, // ✅ FIX: كان 270 وده قليل على الكارد الجديد
           child: Stack(
             children: [
-              places.isEmpty
-    ? Container(
-        width: double.infinity,
-        height: 280,
-        decoration: BoxDecoration(
-          color: const Color(0xFFF9F4EF),
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: const Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.location_off_outlined,
-                  size: 36, color: Color(0xFF8D6E63)),
-              SizedBox(height: 10),
-              Text(
-                'No places found',
-                style: TextStyle(
-                  color: Color(0xFF8D6E63),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      )
+              filteredPlaces.isEmpty
+                  ? Container(
+                      width: double.infinity,
+                      height: 280,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF9F4EF),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.location_off_outlined,
+                              size: 36,
+                              color: Color(0xFF8D6E63),
+                            ),
+                            SizedBox(height: 10),
+                            Text(
+                              'No places found',
+                              style: TextStyle(
+                                color: Color(0xFF8D6E63),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
                   : ListView.builder(
                       controller: scrollController,
                       scrollDirection: Axis.horizontal,
                       physics: const BouncingScrollPhysics(),
                       padding: const EdgeInsets.symmetric(horizontal: 6),
-                      itemCount: places.length,
+                      itemCount: filteredPlaces.length,
                       itemBuilder: (context, index) {
-                        final place = places[index];
+                        final place = filteredPlaces[index];
 
                         return Padding(
                           padding: EdgeInsets.only(
-                            right: index == places.length - 1 ? 6 : 14,
+                            right:
+                                index == filteredPlaces.length - 1 ? 6 : 14,
                           ),
                           child: SizedBox(
                             width: 210, // ✅ لازم نفس عرض الكارد
-                            child: PlaceCard(
-                              key: ValueKey(
-                                '${place.id}_${place.name}_${place.city}_${place.lat}_${place.lng}',
+                            child: HeroMode(
+                              enabled: false,
+                              child: PlaceCard(
+                                key: ValueKey(
+                                  '${place.id}_${place.name}_${place.city}_${place.imageUrl}_${place.imagesRefreshedAt}_${place.mediaUrls.length}_${place.lat}_${place.lng}',
+                                ),
+                                place: place,
                               ),
-                              place: place,
                             ),
                           ),
                         );
@@ -133,7 +169,7 @@ class TopPlacesSection extends StatelessWidget {
                     ),
 
               /// سهم شمال
-              if (places.isNotEmpty && canScrollLeft)
+              if (filteredPlaces.isNotEmpty && canScrollLeft)
                 Positioned(
                   left: 4,
                   top: 0,
@@ -147,7 +183,7 @@ class TopPlacesSection extends StatelessWidget {
                 ),
 
               /// سهم يمين
-              if (places.isNotEmpty)
+              if (filteredPlaces.isNotEmpty)
                 Positioned(
                   right: 4,
                   top: 0,

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:geoguide/constants/app_colors.dart';
@@ -12,9 +13,7 @@ const _kBrownMed = Color(0xFF8D6E63);
 const _kBrownLight = Color(0xFFF4ECE5);
 const _kBg = Color(0xFFF7F1EB);
 const _kBorder = Color(0xFFEEE2D8);
-const _kText = Color(0xFF2E251F);
 const _kTextMid = Color(0xFF5E544D);
-const _kTextLight = Color(0xFF8B817A);
 
 class SavedAiImagesPage extends StatelessWidget {
   static const String routeName = '/saved-ai-images';
@@ -137,9 +136,47 @@ class _SavedAiImageCard extends StatelessWidget {
 
   const _SavedAiImageCard({required this.item});
 
+  Uint8List? _decodeImage(String imageBase64) {
+    try {
+      var cleanBase64 = imageBase64.trim();
+
+      if (cleanBase64.isEmpty) return null;
+
+      /// Handles data URL format:
+      /// data:image/png;base64,xxxx
+      if (cleanBase64.contains(',')) {
+        cleanBase64 = cleanBase64.split(',').last;
+      }
+
+      /// Remove spaces, new lines, tabs
+      cleanBase64 = cleanBase64.replaceAll(RegExp(r'\s+'), '');
+
+      final bytes = base64Decode(cleanBase64);
+
+      if (bytes.isEmpty) return null;
+
+      return bytes;
+    } catch (e) {
+      debugPrint('Saved image decode error: $e');
+      debugPrint('Saved image base64 length: ${imageBase64.length}');
+      debugPrint(
+        'Saved image base64 start: ${imageBase64.length > 40 ? imageBase64.substring(0, 40) : imageBase64}',
+      );
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final imageBytes = base64Decode(item.imageBase64);
+    final imageBytes = _decodeImage(item.imageBase64);
+    final hasValidImage = imageBytes != null && imageBytes.isNotEmpty;
+
+    debugPrint('================ SAVED AI IMAGE ================');
+    debugPrint('Saved AI Image ID: ${item.id}');
+    debugPrint('Saved AI Image Title: ${item.title}');
+    debugPrint('Saved AI Image base64 length: ${item.imageBase64.length}');
+    debugPrint('Has valid image: $hasValidImage');
+    debugPrint('================================================');
 
     final details = AiImageDetails(
       title: item.title,
@@ -152,28 +189,30 @@ class _SavedAiImageCard extends StatelessWidget {
     );
 
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => AiImageDetailsScreen(
-              heroTag: 'saved_${item.id}',
-              imageBytes: imageBytes,
-              details: details,
-            ),
-          ),
-        );
-      },
+      onTap: !hasValidImage
+          ? null
+          : () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AiImageDetailsScreen(
+                    heroTag: 'saved_${item.id}',
+                    imageBytes: imageBytes,
+                    details: details,
+                  ),
+                ),
+              );
+            },
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(24),
           border: Border.all(color: _kBorder),
-          boxShadow: [
+          boxShadow: const [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: AppColors.ivoryCream,
               blurRadius: 16,
-              offset: const Offset(0, 8),
+              offset: Offset(0, 8),
             ),
           ],
         ),
@@ -189,31 +228,61 @@ class _SavedAiImageCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    Hero(
-                      tag: 'saved_${item.id}',
-                      child: Image.memory(
-                        imageBytes,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
+                    if (!hasValidImage)
+                      Container(
+                        color: _kBrownLight,
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.image_not_supported_rounded,
+                          color: _kBrownMed,
+                          size: 42,
+                        ),
+                      )
+                    else ...[
+                      Hero(
+                        tag: 'saved_${item.id}',
+                        child: Image.memory(
+                          imageBytes,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: double.infinity,
+                          gaplessPlayback: true,
+                          errorBuilder: (_, error, ___) {
+                            debugPrint('Image.memory render error: $error');
 
-                    /// GRADIENT
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              Colors.black.withOpacity(0.6),
-                            ],
+                            return Container(
+                              color: _kBrownLight,
+                              alignment: Alignment.center,
+                              child: const Icon(
+                                Icons.image_not_supported_rounded,
+                                color: _kBrownMed,
+                                size: 42,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+
+                      /// GRADIENT
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Colors.transparent,
+                                  Colors.black.withOpacity(0.58),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                    ],
 
-                    /// CLEAN TEXT (بدون glass)
+                    /// TEXT OVER IMAGE
                     Positioned(
                       left: 16,
                       right: 16,
@@ -225,28 +294,34 @@ class _SavedAiImageCard extends StatelessWidget {
                               item.location.isNotEmpty)
                             Wrap(
                               spacing: 6,
+                              runSpacing: 6,
                               children: [
                                 if (item.category.isNotEmpty)
                                   _SmallPill(
                                     icon: Icons.category,
                                     label: item.category,
+                                    hasValidImage: hasValidImage,
                                   ),
                                 if (item.location.isNotEmpty)
                                   _SmallPill(
                                     icon: Icons.location_on,
                                     label: item.location,
+                                    hasValidImage: hasValidImage,
                                   ),
                               ],
                             ),
                           const SizedBox(height: 6),
                           Text(
-                            item.title,
+                            item.title.isNotEmpty
+                                ? item.title
+                                : 'AI Image Details',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: hasValidImage ? Colors.white : _kBrownMed,
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
+                              height: 1.2,
                             ),
                           ),
                         ],
@@ -260,12 +335,15 @@ class _SavedAiImageCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.all(14),
                 child: Text(
-                  item.content,
+                  item.content.isNotEmpty
+                      ? item.content
+                      : 'No description available.',
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _kTextMid,
                     fontSize: 13.5,
+                    height: 1.45,
                   ),
                 ),
               ),
@@ -280,27 +358,46 @@ class _SavedAiImageCard extends StatelessWidget {
 class _SmallPill extends StatelessWidget {
   final IconData icon;
   final String label;
+  final bool hasValidImage;
 
-  const _SmallPill({required this.icon, required this.label});
+  const _SmallPill({
+    required this.icon,
+    required this.label,
+    required this.hasValidImage,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
+        color: hasValidImage
+            ? Colors.black.withOpacity(0.25)
+            : Colors.white.withOpacity(0.75),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: hasValidImage
+              ? Colors.white.withOpacity(0.25)
+              : _kBorder,
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 12, color: Colors.white),
+          Icon(
+            icon,
+            size: 12,
+            color: hasValidImage ? Colors.white : _kBrownMed,
+          ),
           const SizedBox(width: 4),
           Text(
             label,
-            style: const TextStyle(
-              color: Colors.white,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: hasValidImage ? Colors.white : _kBrownMed,
               fontSize: 11,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -327,7 +424,7 @@ class _GlassIconButton extends StatelessWidget {
       width: buttonSize,
       height: buttonSize,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12), // مربع بحواف مدوّرة
+        borderRadius: BorderRadius.circular(12),
         color: Colors.white.withOpacity(0.10),
         border: Border.all(
           color: Colors.white.withOpacity(0.18),

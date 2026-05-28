@@ -1,6 +1,7 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Settings;
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
@@ -15,84 +16,87 @@ import 'package:geoguide/presntation/screens/onboarding.dart';
 import 'package:geoguide/presntation/screens/password_configuration/forgot_password.dart';
 import 'package:geoguide/presntation/screens/password_configuration/reset_password.dart';
 import 'package:geoguide/presntation/screens/profile-screen/profile.dart';
+import 'package:geoguide/presntation/screens/admin/admin_dashboard.dart';
 import 'package:geoguide/presntation/screens/settings-screen/settings.dart';
 import 'package:geoguide/presntation/screens/signup-screen/signup.dart';
 import 'package:geoguide/presntation/screens/signup-screen/verify_email_screen.dart';
 import 'package:geoguide/services/auth_service.dart';
 import 'package:geoguide/utils/city_seader.dart';
 
-Future<void> clearBadImageLinksFromFirestore() async {
-  final snapshot =
-      await FirebaseFirestore.instance.collection('landmarks').get();
+import 'package:geoguide/constants/app_colors.dart';
 
-  for (final doc in snapshot.docs) {
-    final data = doc.data();
+// Future<void> clearBadImageLinksFromFirestore() async {
+//   final snapshot =
+//       await FirebaseFirestore.instance.collection('landmarks').get();
 
-    final imageUrl = (data['imageUrl'] ?? '').toString();
-    final mediaUrls = List<String>.from(data['mediaUrls'] ?? []);
+//   for (final doc in snapshot.docs) {
+//     final data = doc.data();
 
-    final hasBadMain = imageUrl.contains('loremflickr.com');
+//     final imageUrl = (data['imageUrl'] ?? '').toString();
+//     final mediaUrls = List<String>.from(data['mediaUrls'] ?? []);
 
-    final cleanedMedia = mediaUrls
-        .where((u) => !u.toString().contains('loremflickr.com'))
-        .toList();
+//     final hasBadMain = imageUrl.contains('loremflickr.com');
 
-    await doc.reference.update({
-      if (hasBadMain) 'imageUrl': FieldValue.delete(),
-      'mediaUrls': cleanedMedia,
-      'imagesRefreshedAt': FieldValue.delete(),
-    });
-  }
+//     final cleanedMedia = mediaUrls
+//         .where((u) => !u.toString().contains('loremflickr.com'))
+//         .toList();
 
-  debugPrint('Bad loremflickr links removed ✅');
-}
+//     await doc.reference.update({
+//       if (hasBadMain) 'imageUrl': FieldValue.delete(),
+//       'mediaUrls': cleanedMedia,
+//       'imagesRefreshedAt': FieldValue.delete(),
+//     });
+//   }
 
-Future<void> clearImagesFromFirestore() async {
-  final snapshot =
-      await FirebaseFirestore.instance.collection('landmarks').get();
+//   debugPrint('Bad loremflickr links removed ✅');
+// }
 
-  for (final doc in snapshot.docs) {
-    await doc.reference.update({
-      'imageUrl': FieldValue.delete(),
-      'mediaUrls': FieldValue.delete(),
-      'imagesRefreshedAt': FieldValue.delete(),
-    });
-  }
+// Future<void> clearImagesFromFirestore() async {
+//   final snapshot =
+//       await FirebaseFirestore.instance.collection('landmarks').get();
 
-  debugPrint('Images + refresh timestamps cleared safely ✅');
-}
+//   for (final doc in snapshot.docs) {
+//     await doc.reference.update({
+//       'imageUrl': FieldValue.delete(),
+//       'mediaUrls': FieldValue.delete(),
+//       'imagesRefreshedAt': FieldValue.delete(),
+//     });
+//   }
 
-Future<void> keepOnlyTenLandmarks() async {
-  try {
-    final firestore = FirebaseFirestore.instance;
+//   debugPrint('Images + refresh timestamps cleared safely ✅');
+// }
 
-    final snapshot = await firestore.collection('landmarks').get();
+// Future<void> keepOnlyTenLandmarks() async {
+//   try {
+//     final firestore = FirebaseFirestore.instance;
 
-    print('Total landmarks: ${snapshot.docs.length}');
+//     final snapshot = await firestore.collection('landmarks').get();
 
-    if (snapshot.docs.length <= 3) {
-      print('Already 3 or less.');
-      return;
-    }
+//     print('Total landmarks: ${snapshot.docs.length}');
 
-    final batch = firestore.batch();
+//     if (snapshot.docs.length <= 3) {
+//       print('Already 3 or less.');
+//       return;
+//     }
 
-    // سيب أول 10 وامسح الباقي
-    for (int i = 3; i < snapshot.docs.length; i++) {
-      final doc = snapshot.docs[i];
+//     final batch = firestore.batch();
 
-      print('Deleting: ${doc.id}');
+//     // سيب أول 10 وامسح الباقي
+//     for (int i = 3; i < snapshot.docs.length; i++) {
+//       final doc = snapshot.docs[i];
 
-      batch.delete(doc.reference);
-    }
+//       print('Deleting: ${doc.id}');
 
-    await batch.commit();
+//       batch.delete(doc.reference);
+//     }
 
-    print('Deleted successfully.');
-  } catch (e) {
-    print('ERROR: $e');
-  }
-}
+//     await batch.commit();
+
+//     print('Deleted successfully.');
+//   } catch (e) {
+//     print('ERROR: $e');
+//   }
+// }
 
 Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
@@ -137,20 +141,45 @@ class GeoGuideApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      initialRoute: Onboarding.routeName,
-      routes: {
-        Onboarding.routeName: (_) => const Onboarding(),
-        Login.routeName: (_) => Login(),
-        Home.routeName: (_) => const Home(),
-        Signup.routeName: (_) => Signup(),
-        ForgotPassword.routeName: (_) => ForgotPassword(),
-        ResetPassword.routeName: (_) => ResetPassword(),
-        Profile.routeName: (_) => const Profile(),
-        Settings.routeName: (_) => const Settings(),
-        CreateCity.routeName: (_) => const CreateCity(),
-        VerifyEmailScreen.routeName: (_) => const VerifyEmailScreen(),
-      },
-    );
+  debugShowCheckedModeBanner: false,
+
+  themeMode: ThemeMode.light,
+
+  theme: ThemeData(
+    brightness: Brightness.light,
+
+    scaffoldBackgroundColor: const Color(0xFFF7F1EB),
+
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: AppColors.chestnutBrown,
+      brightness: Brightness.light,
+    ),
+
+    appBarTheme: const AppBarTheme(
+      backgroundColor: AppColors.chestnutBrown,
+      foregroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+    ),
+  ),
+
+  initialRoute: FirebaseAuth.instance.currentUser == null
+      ? Onboarding.routeName
+      : Home.routeName,
+
+  routes: {
+    Onboarding.routeName: (_) => const Onboarding(),
+    Login.routeName: (_) => Login(),
+    Home.routeName: (_) => const Home(),
+    Signup.routeName: (_) => Signup(),
+    ForgotPassword.routeName: (_) => ForgotPassword(),
+    ResetPassword.routeName: (_) => ResetPassword(),
+    Profile.routeName: (_) => const Profile(),
+    Settings.routeName: (_) => const Settings(),
+    CreateCity.routeName: (_) => const CreateCity(),
+    VerifyEmailScreen.routeName: (_) => const VerifyEmailScreen(),
+    AdminDashboard.routeName: (_) => const AdminDashboard(),
+  },
+);
   }
 }

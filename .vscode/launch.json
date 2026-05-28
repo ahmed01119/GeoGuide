@@ -2,13 +2,25 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Flutter Web (Fixed Port)",
+      "name": "GeoGuide Web - Edge Port 3000",
       "request": "launch",
       "type": "dart",
-      "deviceId": "chrome",
+      "deviceId": "edge",
       "args": [
         "--web-port",
-        "5000"
+        "3000"
+      ]
+    },
+    {
+      "name": "GeoGuide Web - Network Port 3000",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "edge",
+      "args": [
+        "--web-hostname",
+        "0.0.0.0",
+        "--web-port",
+        "3000"
       ]
     }
   ]

@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/presntation/place-info/place-info.dart';
 import 'package:geoguide/services/firebase_service.dart';
@@ -157,18 +158,26 @@ class PlannerScreen extends StatelessWidget {
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
-          SliverAppBar(
-            expandedHeight: expandedHeight,
-            pinned: true,
-            stretch: true,
-            backgroundColor: const Color(0xFF8D6E63),
-            leading: Padding(
-              padding: const EdgeInsets.all(8),
-              child: _GlassIconButton(
-                icon: Icons.arrow_back_ios_new_rounded,
-                onTap: () => Navigator.pop(context),
-              ),
-            ),
+         SliverAppBar(
+  expandedHeight: 280,
+  toolbarHeight: 72,
+  pinned: true,
+  backgroundColor: AppColors.chestnutBrown,
+  surfaceTintColor: Colors.transparent,
+  shape: const RoundedRectangleBorder(
+    borderRadius: BorderRadius.vertical(
+      bottom: Radius.circular(30),
+    ),
+  ),
+
+  clipBehavior: Clip.antiAlias,
+  leading: Padding(
+    padding: const EdgeInsets.only(left: 12, top: 8, bottom: 28),
+    child: _GlassIconButton(
+      icon: Icons.arrow_back_ios_new_rounded,
+      onTap: () => Navigator.pop(context),
+    ),
+  ),
             actions: [
               IconButton(
                 icon: const Icon(Icons.bookmark_add_outlined),

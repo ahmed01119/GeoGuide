@@ -4,11 +4,19 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ChatbotService {
-  static const String _newAiBaseUrl =
+  /// Chatbot API Space
+  /// Expected endpoint: /chat
+  static const String _chatbotApiBaseUrl =
       "https://geoguide-organization-geoguide-api.hf.space";
 
-  static const String _ragAiBaseUrl =
+  /// RAG / Places API Space
+  /// Expected endpoint: /api/ask
+  static const String _ragApiBaseUrl =
       "https://geoguide-organization-geoguide-chatbot-api.hf.space";
+
+
+  static const Duration _shortTimeout = Duration(seconds: 35);
+  static const Duration _longTimeout = Duration(seconds: 240);
 
   Future<ChatbotResponse> ask(String question) async {
     final clean = question.trim();
@@ -23,12 +31,16 @@ class ChatbotService {
 
     final start = DateTime.now();
 
-    // 1) Try New AI first
+    /// مهم جدًا للـ deployment:
+    /// Hugging Face Space ممكن يكون نايم، فبنحاول نصحي السيرفر الأول.
+    await _warmUpServices();
+
+    /// 1) Try Chatbot API first
     try {
-      final answer = await _askNewAi(clean);
+      final answer = await _askChatbotApi(clean);
 
       if (answer.trim().isNotEmpty) {
-        debugPrint('✅ Answer source: New AI');
+        debugPrint('✅ Answer source: Chatbot API');
 
         return ChatbotResponse(
           answer: answer,
@@ -37,32 +49,29 @@ class ChatbotService {
         );
       }
 
-      throw Exception('New AI returned empty answer');
+      throw Exception('Chatbot API returned empty answer');
     } catch (e) {
-      debugPrint('⚠️ New AI failed. Switching to RAG fallback...');
-      debugPrint('New AI error: $e');
+      debugPrint('⚠️ Chatbot API failed. Switching to RAG fallback...');
+      debugPrint('Chatbot API error: $e');
     }
 
-    // 2) If New AI fails, use RAG fallback
+    /// 2) Try RAG API fallback
     try {
-      await _warmUpRag();
+      final fallbackAnswer = await _askRagApi(clean);
 
-      final fallbackResponse = await _askRagFallback(clean);
+      if (fallbackAnswer.trim().isNotEmpty) {
+        debugPrint('✅ Answer source: RAG API fallback');
 
-      if (fallbackResponse.answer.trim().isNotEmpty) {
-        debugPrint('✅ Answer source: RAG fallback');
-
-        return fallbackResponse.copyWith(
+        return ChatbotResponse(
+          answer: fallbackAnswer,
+          responseTimeSec: _elapsedSeconds(start),
           source: ChatbotSource.ragFallback,
-          responseTimeSec: fallbackResponse.responseTimeSec == 0
-              ? _elapsedSeconds(start)
-              : fallbackResponse.responseTimeSec,
         );
       }
 
-      throw Exception('RAG returned empty answer');
+      throw Exception('RAG API returned empty answer');
     } catch (e) {
-      debugPrint('❌ RAG fallback failed: $e');
+      debugPrint('❌ RAG API fallback failed: $e');
 
       return ChatbotResponse(
         answer: 'Could not connect to AI services. Please try again later.',
@@ -72,80 +81,160 @@ class ChatbotService {
     }
   }
 
-  Future<String> _askNewAi(String question) async {
-    final response = await http
-        .post(
-          Uri.parse('$_newAiBaseUrl/api/ask'),
-          headers: const {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'question': question,
-          }),
-        )
-        .timeout(const Duration(seconds: 45));
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'New AI server error: ${response.statusCode} | ${response.body}',
-      );
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-    return _formatNewAiResponse(data);
-  }
-
-  Future<ChatbotResponse> _askRagFallback(String question) async {
-    final response = await http
-        .post(
-          Uri.parse('$_ragAiBaseUrl/chat'),
-          headers: const {
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'question': question,
-          }),
-        )
-        .timeout(const Duration(seconds: 240));
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'RAG fallback server error: ${response.statusCode} | ${response.body}',
-      );
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-
-    if (data['error'] != null) {
-      throw Exception(
-        'RAG API error: ${data['error']} ${data['details'] ?? ''}',
-      );
-    }
-
-    return ChatbotResponse(
-      answer: (data['answer'] ?? 'No answer found.').toString(),
-      responseTimeSec: ((data['response_time_sec'] ?? 0) as num).toDouble(),
-      source: ChatbotSource.ragFallback,
-    );
-  }
-
-  Future<void> _warmUpRag() async {
+  Future<String> _askChatbotApi(String question) async {
+    /// الأساسي المتوقع للـ chatbot-api
     try {
+      final data = await _postJson(
+        url: '$_chatbotApiBaseUrl/chat',
+        body: {
+          'question': question,
+        },
+        timeout: _longTimeout,
+      );
+
+      return _formatAnyAiResponse(data);
+    } catch (e) {
+      debugPrint('⚠️ /chat failed on chatbot API: $e');
+    }
+
+    /// fallback احتياطي لو السيرفر عنده endpoint مختلف
+    final data = await _postJson(
+      url: '$_chatbotApiBaseUrl/api/ask',
+      body: {
+        'question': question,
+      },
+      timeout: _longTimeout,
+    );
+
+    return _formatAnyAiResponse(data);
+  }
+
+  Future<String> _askRagApi(String question) async {
+    /// الأساسي المتوقع للـ rag-api
+    try {
+      final data = await _postJson(
+        url: '$_ragApiBaseUrl/api/ask',
+        body: {
+          'question': question,
+        },
+        timeout: _longTimeout,
+      );
+
+      return _formatAnyAiResponse(data);
+    } catch (e) {
+      debugPrint('⚠️ /api/ask failed on RAG API: $e');
+    }
+
+    /// fallback احتياطي لو السيرفر عنده endpoint /chat
+    final data = await _postJson(
+      url: '$_ragApiBaseUrl/chat',
+      body: {
+        'question': question,
+      },
+      timeout: _longTimeout,
+    );
+
+    return _formatAnyAiResponse(data);
+  }
+
+  Future<Map<String, dynamic>> _postJson({
+    required String url,
+    required Map<String, dynamic> body,
+    required Duration timeout,
+  }) async {
+    debugPrint('➡️ POST $url');
+
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: const {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: jsonEncode(body),
+        )
+        .timeout(timeout);
+
+    debugPrint('⬅️ Status: ${response.statusCode} from $url');
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Server error: ${response.statusCode} | ${response.body}',
+      );
+    }
+
+    final decoded = jsonDecode(response.body);
+
+    if (decoded is Map<String, dynamic>) {
+      if (decoded['error'] != null) {
+        throw Exception(
+          'API error: ${decoded['error']} ${decoded['details'] ?? ''}',
+        );
+      }
+
+      return decoded;
+    }
+
+    throw Exception('Invalid response format: ${response.body}');
+  }
+
+  Future<void> _warmUpServices() async {
+    await Future.wait([
+      _warmUpUrl('$_chatbotApiBaseUrl/health'),
+      _warmUpUrl(_chatbotApiBaseUrl),
+      _warmUpUrl('$_ragApiBaseUrl/health'),
+      _warmUpUrl(_ragApiBaseUrl),
+    ]);
+  }
+
+  Future<void> _warmUpUrl(String url) async {
+    try {
+      debugPrint('🔥 Warming up: $url');
+
       await http
-          .get(Uri.parse('$_ragAiBaseUrl/health'))
-          .timeout(const Duration(seconds: 30));
-    } catch (_) {
-      // Ignore warm-up errors and continue to /chat
+          .get(
+            Uri.parse(url),
+            headers: const {
+              'Accept': 'application/json',
+            },
+          )
+          .timeout(_shortTimeout);
+    } catch (e) {
+      /// مش هنوقف السؤال لو warm-up فشل
+      debugPrint('Warm-up ignored for $url: $e');
     }
   }
 
-  String _formatNewAiResponse(Map<String, dynamic> data) {
+  String _formatAnyAiResponse(Map<String, dynamic> data) {
+    /// common format:
+    /// { "answer": "..." }
     if (data['answer'] != null) {
       final answer = data['answer'].toString().trim();
       if (answer.isNotEmpty) return answer;
     }
 
+    /// another possible format:
+    /// { "response": "..." }
+    if (data['response'] != null) {
+      final response = data['response'].toString().trim();
+      if (response.isNotEmpty) return response;
+    }
+
+    /// another possible format:
+    /// { "message": "..." }
+    if (data['message'] != null) {
+      final message = data['message'].toString().trim();
+      if (message.isNotEmpty) return message;
+    }
+
+    /// structured landmark format:
+    /// {
+    ///   "title": "...",
+    ///   "location": "...",
+    ///   "content": "...",
+    ///   "historical_facts": [],
+    ///   "travel_tips": []
+    /// }
     final title = data['title']?.toString() ?? '';
     final location = data['location']?.toString() ?? '';
     final content = data['content']?.toString() ?? '';
@@ -162,25 +251,28 @@ class ChatbotService {
 
     final buffer = StringBuffer();
 
-    if (title.isNotEmpty) {
-      buffer.writeln('🏛️ $title');
+    if (title.trim().isNotEmpty) {
+      buffer.writeln('🏛️ ${title.trim()}');
       buffer.writeln();
     }
 
-    if (location.isNotEmpty) {
-      buffer.writeln('📍 Location: $location');
+    if (location.trim().isNotEmpty) {
+      buffer.writeln('📍 Location: ${location.trim()}');
       buffer.writeln();
     }
 
-    if (content.isNotEmpty) {
-      buffer.writeln(content);
+    if (content.trim().isNotEmpty) {
+      buffer.writeln(content.trim());
       buffer.writeln();
     }
 
     if (historicalFacts.isNotEmpty) {
       buffer.writeln('📚 Historical Facts:');
       for (final fact in historicalFacts) {
-        buffer.writeln('• $fact');
+        final cleanFact = fact.trim();
+        if (cleanFact.isNotEmpty) {
+          buffer.writeln('• $cleanFact');
+        }
       }
       buffer.writeln();
     }
@@ -188,14 +280,17 @@ class ChatbotService {
     if (travelTips.isNotEmpty) {
       buffer.writeln('💡 Travel Tips:');
       for (final tip in travelTips) {
-        buffer.writeln('• $tip');
+        final cleanTip = tip.trim();
+        if (cleanTip.isNotEmpty) {
+          buffer.writeln('• $cleanTip');
+        }
       }
     }
 
     final result = buffer.toString().trim();
 
     if (result.isEmpty) {
-      throw Exception('New AI response format is empty');
+      throw Exception('AI response format is empty: $data');
     }
 
     return result;

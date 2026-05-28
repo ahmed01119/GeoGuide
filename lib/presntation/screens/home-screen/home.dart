@@ -23,6 +23,7 @@ import 'package:geoguide/presntation/screens/places-screen/places.dart';
 import 'package:geoguide/presntation/screens/plans-screen/plans-screen.dart';
 import 'package:geoguide/services/firebase_service.dart';
 import 'package:geoguide/services/place_repository.dart';
+import 'package:geoguide/services/landmark_cache.dart';
 import 'package:geoguide/services/planner_ai_service.dart';
 import 'package:geoguide/services/search-service.dart';
 import 'package:image_picker/image_picker.dart';
@@ -80,6 +81,7 @@ class _HomeState extends State<Home> {
 
   final TextEditingController _searchCtrl = TextEditingController();
   Timer? _suggestionDebounce;
+  StreamSubscription<Landmark>? _adminPlaceChangeSub;
 
   void _showHomeNotification(
     String message, {
@@ -103,6 +105,9 @@ class _HomeState extends State<Home> {
   void initState() {
     super.initState();
 
+    _adminPlaceChangeSub =
+        LandmarkCache.instance.adminPlaceChanges.listen(_onAdminPlaceChanged);
+
     _scrollCtrl.addListener(() {
       if (!mounted) return;
       setState(() => _canScrollLeft = _scrollCtrl.offset > 0);
@@ -121,6 +126,7 @@ class _HomeState extends State<Home> {
     _pageScrollCtrl.dispose();
     _searchCtrl.dispose();
     _suggestionDebounce?.cancel();
+    _adminPlaceChangeSub?.cancel();
     super.dispose();
   }
 
@@ -130,14 +136,44 @@ class _HomeState extends State<Home> {
   //  BUILD
   // ════════════════════════════════════════════════════════
 
+  List<Landmark> _filterDisplayedPlacesForCurrentCity(
+    List<Landmark> sourcePlaces,
+  ) {
+    final selectedCityName = _selectedCity?.name.trim().toLowerCase();
+    final shouldFilterByCity = selectedCityName != null &&
+        selectedCityName.isNotEmpty &&
+        selectedCityName != 'all egypt';
+
+    return sourcePlaces.where((place) {
+      final hasValidName = place.name.trim().isNotEmpty;
+      if (!hasValidName) return false;
+
+      if (!shouldFilterByCity) return true;
+
+      return place.city.trim().toLowerCase() == selectedCityName;
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final displayedPlaces = _displayedPlaces;
+    final displayedPlaces =
+        _filterDisplayedPlacesForCurrentCity(_displayedPlaces);
     final media = MediaQuery.of(context);
     final maxBotTop = media.size.height - 130;
 
-    return SafeArea(
-      child: Scaffold(
+    return WillPopScope(
+      onWillPop: () async {
+        if (_pageScrollCtrl.hasClients && _pageScrollCtrl.offset > 0) {
+          _pageScrollCtrl.animateTo(
+            0,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOut,
+          );
+        }
+        return false;
+      },
+      child: SafeArea(
+        child: Scaffold(
         backgroundColor: const Color(0xFFF7F1EB),
         body: Stack(
           children: [
@@ -338,6 +374,7 @@ class _HomeState extends State<Home> {
         ),
         floatingActionButtonLocation: const _FixedCenterDockedFabLocation(),
         bottomNavigationBar: const CustomBottomNavBar(),
+        ),
       ),
     );
   }

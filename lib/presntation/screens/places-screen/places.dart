@@ -1,10 +1,17 @@
 // ignore_for_file: sort_child_properties_last, file_names
 
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'package:flutter/services.dart';
 import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/presntation/place-info/place-info.dart';
+import 'package:geoguide/constants/app_injector.dart';
+
+
+
 
 class Places extends StatelessWidget {
   final List<Landmark> places;
@@ -50,16 +57,27 @@ class Places extends StatelessWidget {
         slivers: [
           SliverAppBar(
             expandedHeight: headerHeight,
+            toolbarHeight: 72,
             pinned: true,
             stretch: true,
+            backgroundColor: AppColors.chestnutBrown,
+            systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
+              statusBarColor: AppColors.chestnutBrown,
+            ),
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(
+                bottom: Radius.circular(30),
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
+            leadingWidth: 72,
             leading: Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.only(left: 12, top: 8, bottom: 22),
               child: _GlassIconButton(
                 icon: Icons.arrow_back_ios_new_rounded,
                 onTap: () => Navigator.pop(context),
               ),
             ),
-            backgroundColor: AppColors.chestnutBrown,
             flexibleSpace: FlexibleSpaceBar(
               background: Stack(
                 fit: StackFit.expand,
@@ -71,21 +89,24 @@ class Places extends StatelessWidget {
                         end: Alignment.bottomRight,
                         colors: [
                           AppColors.chestnutBrown,
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),
                   ),
                   Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.black.withOpacity(0.16),
-                            Colors.black.withOpacity(0.05),
-                            Colors.black.withOpacity(0.42),
-                          ],
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.white.withOpacity(0.04),
+                              Colors.white.withOpacity(0.02),
+                              Colors.black.withOpacity(0.06),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -93,7 +114,7 @@ class Places extends StatelessWidget {
                   Positioned(
                     left: horizontalPadding,
                     right: horizontalPadding,
-                    bottom: _r(height * 0.018, 14, 22),
+                    bottom: glassBottom,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: BackdropFilter(
@@ -127,8 +148,7 @@ class Places extends StatelessWidget {
                                     maxWidth: constraints.maxWidth,
                                   ),
                                   child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Container(
@@ -138,8 +158,7 @@ class Places extends StatelessWidget {
                                         ),
                                         decoration: BoxDecoration(
                                           color: Colors.white.withOpacity(0.16),
-                                          borderRadius:
-                                              BorderRadius.circular(999),
+                                          borderRadius: BorderRadius.circular(999),
                                         ),
                                         child: Text(
                                           'Explore Egypt',
@@ -151,9 +170,7 @@ class Places extends StatelessWidget {
                                           ),
                                         ),
                                       ),
-                                      SizedBox(
-                                        height: _r(height * 0.014, 10, 14),
-                                      ),
+                                      SizedBox(height: _r(height * 0.014, 10, 14)),
                                       Text(
                                         'All places\nin one screen',
                                         maxLines: 2,
@@ -165,9 +182,7 @@ class Places extends StatelessWidget {
                                           fontWeight: FontWeight.w800,
                                         ),
                                       ),
-                                      SizedBox(
-                                        height: _r(height * 0.010, 7, 10),
-                                      ),
+                                      SizedBox(height: _r(height * 0.010, 7, 10)),
                                       Text(
                                         places.isEmpty
                                             ? 'No places available right now.'
@@ -270,6 +285,46 @@ class _PlaceListCard extends StatelessWidget {
     required this.onTap,
   });
 
+  @override
+  Widget build(BuildContext context) {
+    final placeId = place.id.trim();
+
+    if (placeId.isEmpty) {
+      return _PlaceListCardBody(place: place, onTap: onTap);
+    }
+
+    return StreamBuilder<Landmark>(
+      stream: AppInjector.repository.streamLandmark(placeId),
+      builder: (context, snapshot) {
+        final livePlace = snapshot.data ?? place;
+
+        return _PlaceListCardBody(
+          place: livePlace,
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => PlaceInfoScreen(place: livePlace),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+  }
+}
+
+class _PlaceListCardBody extends StatelessWidget {
+  final Landmark place;
+  final VoidCallback onTap;
+
+  const _PlaceListCardBody({
+    super.key,
+    required this.place,
+    required this.onTap,
+  });
+
   static double _r(double value, double min, double max) {
     return value.clamp(min, max).toDouble();
   }
@@ -305,6 +360,7 @@ class _PlaceListCard extends StatelessWidget {
     final width = media.size.width;
     final height = media.size.height;
 
+
     final imageHeight = _r(height * 0.215, 170, 230);
     final cardPadding = _r(width * 0.038, 14, 20);
     final titleSize = _r(width * 0.046, 17, 20);
@@ -338,23 +394,35 @@ class _PlaceListCard extends StatelessWidget {
                 child: SizedBox(
                   height: imageHeight,
                   width: double.infinity,
-                  child: _imageUrl.isEmpty
+                      child: _imageUrl.isEmpty
                       ? const _Placeholder()
-                      : Image.network(
-                          _imageUrl,
-                          fit: BoxFit.cover,
-                          loadingBuilder: (context, child, progress) {
-                            if (progress == null) return child;
-                            return Container(
-                              color: const Color(0xFFE9E1D9),
-                              child: const Center(
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
+                      : Builder(
+                          builder: (context) {
+                            final imagesRefreshedAt = place.imagesRefreshedAt;
+                            final mediaCount = place.mediaUrls.length;
+
+                            final key = ValueKey(
+                              '${place.id}_${place.imageUrl}_${imagesRefreshedAt}_$mediaCount',
+                            );
+
+                            return Image.network(
+                              key: key,
+                              _imageUrl,
+                              fit: BoxFit.cover,
+                              loadingBuilder: (context, child, progress) {
+                                if (progress == null) return child;
+                                return Container(
+                                  color: const Color(0xFFE9E1D9),
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                );
+                              },
+                              errorBuilder: (_, __, ___) => const _Placeholder(),
                             );
                           },
-                          errorBuilder: (_, __, ___) => const _Placeholder(),
                         ),
                 ),
               ),

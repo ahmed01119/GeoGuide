@@ -21,11 +21,19 @@ class LandmarkCache {
   // ── Stream controllers per place ─────────────────────────
   final Map<String, StreamController<Landmark>> _controllers = {};
 
+  // Explicit admin-change stream.
+  // This is intentionally separate from normal cache put/merge notifications
+  // so Home does not rebuild for every normal Firestore/cache hydration event.
+  final StreamController<Landmark> _adminChangeController =
+      StreamController<Landmark>.broadcast();
+
   // ── TTLs ──────────────────────────────────────────────────
   static const Duration _freshTtl = Duration(minutes: 15);
-  static const Duration _imageTtl = Duration(days: 14);
+  static const Duration _imageTtl = Duration(days: 7);
   static const Duration _wikiTtl = Duration(days: 30);
-  static const Duration _nearbyTtl = Duration(hours: 6);
+  static const Duration _nearbyTtl = Duration(hours: 24);
+  static const Duration _imageFailureCooldown = Duration(hours: 24);
+  static const Duration _nearbyFailureCooldown = Duration(hours: 24);
 
   // ════════════════════════════════════════════════════════
   //  WRITE
@@ -37,6 +45,21 @@ class LandmarkCache {
     _store[landmark.id] = _Entry(landmark: landmark, cachedAt: DateTime.now());
     _notify(landmark);
   }
+
+  /// Notify global UI screens that an admin explicitly changed this place.
+  ///
+  /// Use this only after admin save/refresh/add operations. It updates the
+  /// cache first, then broadcasts a single targeted event for Home/Places.
+  void notifyAdminPlaceChanged(Landmark landmark) {
+    if (landmark.id.trim().isEmpty) return;
+    put(landmark);
+    if (!_adminChangeController.isClosed) {
+      _adminChangeController.add(landmark);
+    }
+  }
+
+  /// Stream of explicit admin changes only.
+  Stream<Landmark> get adminPlaceChanges => _adminChangeController.stream;
 
   /// Merge incoming data, always keeping the richer version per field.
   void merge(Landmark incoming) {
@@ -100,6 +123,12 @@ class LandmarkCache {
       return true;
     }
     if (lm.imagesAreFallback) return true;
+
+    if (lm.imagesFailedAt != null &&
+        !_isExpired(lm.imagesFailedAt!, _imageFailureCooldown)) {
+      return false;
+    }
+
     final validCount = lm.mediaUrls.where(_isValidUrl).length;
     if (validCount < 1 || lm.imageUrl.trim().isEmpty) return true;
     if (lm.imagesRefreshedAt == null) return true;
@@ -117,6 +146,10 @@ class LandmarkCache {
   bool needsNearbyRefresh(String id) {
     final lm = get(id);
     if (lm == null) return true;
+    if (lm.nearbyFailedAt != null &&
+        !_isExpired(lm.nearbyFailedAt!, _nearbyFailureCooldown)) {
+      return false;
+    }
     if (lm.nearbyPlaces.isEmpty) return true;
     if (lm.nearbyUpdatedAt == null) return true;
     return _isExpired(lm.nearbyUpdatedAt!, _nearbyTtl);
@@ -188,6 +221,16 @@ class LandmarkCache {
           _newerDate(incoming.imagesRefreshedAt, old.imagesRefreshedAt),
       nearbyUpdatedAt:
           _newerDate(incoming.nearbyUpdatedAt, old.nearbyUpdatedAt),
+      nearbyRefreshedAt:
+          _newerDate(incoming.nearbyRefreshedAt, old.nearbyRefreshedAt),
+      imagesFailedAt: _newerDate(incoming.imagesFailedAt, old.imagesFailedAt),
+      imagesFailureReason: incoming.imagesFailureReason.trim().isNotEmpty
+          ? incoming.imagesFailureReason
+          : old.imagesFailureReason,
+      nearbyFailedAt: _newerDate(incoming.nearbyFailedAt, old.nearbyFailedAt),
+      nearbyFailureReason: incoming.nearbyFailureReason.trim().isNotEmpty
+          ? incoming.nearbyFailureReason
+          : old.nearbyFailureReason,
 
       // Nearby: merge lists
       nearbyPlaces: _mergeNearby(old.nearbyPlaces, incoming.nearbyPlaces),

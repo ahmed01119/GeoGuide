@@ -12,18 +12,21 @@
 //  - Returns the exact searched place first when it is found/generated.
 // ============================================================
 
-// ignore_for_file: avoid_print
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:geoguide/core/config/app_config.dart';
 import 'package:geoguide/core/place_category_normalizer.dart';
+import 'package:geoguide/core/place_search_pipeline.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
+import 'package:geoguide/services/semantic-score.dart';
 import 'package:geoguide/services/Wikipedia%20service.dart';
 import 'package:geoguide/services/firebase_service.dart';
+import 'package:geoguide/services/image-service.dart';
 import 'package:geoguide/services/landmark_cache.dart';
 import 'package:geoguide/services/nearby-service.dart';
 
@@ -33,6 +36,12 @@ class SearchResult {
   final List<String> suggestions;
   final String? detectedCity;
   final String? detectedCategory;
+  /// Egyptian city inferred from explicit wording in the query (e.g. Hurghada).
+  final String? cityIntent;
+  /// True when the query is a generic category browse ("cafes in Cairo"), not a named place.
+  final bool isGenericCategoryQuery;
+  /// Parallel to [results]: provenance for debugging (null when omitted).
+  final List<PlaceResultSource>? resultSources;
 
   const SearchResult({
     required this.correctedQuery,
@@ -40,9 +49,28 @@ class SearchResult {
     this.suggestions = const [],
     this.detectedCity,
     this.detectedCategory,
+    this.cityIntent,
+    this.isGenericCategoryQuery = false,
+    this.resultSources,
   });
 
-  static const empty = SearchResult(correctedQuery: '', results: []);
+  static const empty = SearchResult(
+    correctedQuery: '',
+    results: [],
+    resultSources: null,
+    cityIntent: null,
+    isGenericCategoryQuery: false,
+  );
+}
+
+class _CategoryListingMatch {
+  final String category;
+  final String citySegment;
+
+  const _CategoryListingMatch({
+    required this.category,
+    required this.citySegment,
+  });
 }
 
 class SearchEngine {
@@ -50,14 +78,17 @@ class SearchEngine {
     FirebaseService? firebase,
     WikipediaService? wikipedia,
     NearbyService? nearby,
+    ImageService? images,
   })  : _firebase = firebase ?? FirebaseService(),
         _wikipedia = wikipedia ?? WikipediaService(),
         _nearby = nearby ?? NearbyService(),
+        _images = images ?? ImageService(),
         _cache = LandmarkCache.instance;
 
   final FirebaseService _firebase;
   final WikipediaService _wikipedia;
   final NearbyService _nearby;
+  final ImageService _images;
   final LandmarkCache _cache;
 
   List<Landmark>? _index;
@@ -69,6 +100,543 @@ class SearchEngine {
 
   // Prevent repeated background saves for the same category/city batch.
   final Set<String> _backgroundSaveKeys = {};
+
+  /// Short cooldown after Nominatim/network failures to avoid hammering providers.
+  final Map<String, DateTime> _providerCooldownUntil = {};
+
+  bool _isProviderCoolingDown(String key) {
+    final until = _providerCooldownUntil[key];
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  void _cooldownProvider(String key, {Duration duration = const Duration(minutes: 2)}) {
+    _providerCooldownUntil[key] = DateTime.now().add(duration);
+    if (kDebugMode) {
+      debugPrint('[SearchEngine] provider cooldown until ${_providerCooldownUntil[key]} key=$key');
+    }
+  }
+
+  _CategoryListingMatch? _tryParseCategoryListingQuery(String raw) {
+    final n = _normalizeSearchText(raw);
+    if (n.isEmpty) return null;
+
+    final m = RegExp(r'^(.+?)\s+(?:in|near|around|at|في)\s+(.+)$').firstMatch(n);
+    if (m == null) return null;
+    final left = _stripListingCategoryFiller(m.group(1)!.trim());
+    final right = m.group(2)!.trim();
+    if (left.isEmpty || right.isEmpty) return null;
+
+    final cat = _categoryPhraseToListingCategory(left);
+    if (cat == null) return null;
+    return _CategoryListingMatch(category: cat, citySegment: right);
+  }
+
+  String _stripListingCategoryFiller(String phrase) {
+    var p = phrase.trim();
+    for (final w in [
+      'best', 'top', 'famous', 'popular', 'nice', 'good', 'great', 'amazing',
+      'recommended', 'beautiful',
+    ]) {
+      p = p.replaceFirst(RegExp('^$w\\s+'), '');
+    }
+    return p.trim();
+  }
+
+  String? _categoryPhraseToListingCategory(String phraseNorm) {
+    final p = phraseNorm.trim();
+    if (p.isEmpty) return null;
+
+    final entries = <(String, String)>[
+      ('tourist attractions', 'tourist'),
+      ('tourist attraction', 'tourist'),
+      ('historic sites', 'tourist'),
+      ('historic site', 'tourist'),
+      ('outing places', 'outing'),
+      ('outing place', 'outing'),
+      ('shopping malls', 'outing'),
+      ('shopping mall', 'outing'),
+      ('coffee shops', 'cafe'),
+      ('coffee shop', 'cafe'),
+      ('public parks', 'outing'),
+      ('public park', 'outing'),
+      ('amusement parks', 'outing'),
+      ('theme parks', 'outing'),
+      ('theme park', 'outing'),
+      ('night life', 'outing'),
+      ('parks', 'outing'),
+      ('park', 'outing'),
+      ('gardens', 'outing'),
+      ('garden', 'outing'),
+      ('malls', 'outing'),
+      ('mall', 'outing'),
+      ('beaches', 'outing'),
+      ('beach', 'outing'),
+      ('marinas', 'outing'),
+      ('marina', 'outing'),
+      ('promenades', 'outing'),
+      ('promenade', 'outing'),
+      ('corniches', 'outing'),
+      ('corniche', 'outing'),
+      ('souks', 'outing'),
+      ('souk', 'outing'),
+      ('markets', 'outing'),
+      ('market', 'outing'),
+      ('bazaars', 'outing'),
+      ('bazaar', 'outing'),
+      ('entertainment', 'outing'),
+      ('nightlife', 'outing'),
+      ('restaurants', 'restaurant'),
+      ('restaurant', 'restaurant'),
+      ('cafes', 'cafe'),
+      ('cafe', 'cafe'),
+      ('hotels', 'hotel'),
+      ('hotel', 'hotel'),
+      ('hostels', 'hotel'),
+      ('hostel', 'hotel'),
+      ('museums', 'tourist'),
+      ('museum', 'tourist'),
+      ('landmarks', 'tourist'),
+      ('landmark', 'tourist'),
+      ('attractions', 'tourist'),
+      ('attraction', 'tourist'),
+      ('sightseeing', 'tourist'),
+    ];
+    entries.sort((a, b) => b.$1.length.compareTo(a.$1.length));
+
+    for (final e in entries) {
+      if (p == e.$1) return e.$2;
+    }
+    for (final e in entries) {
+      if (p.contains(e.$1)) return e.$2;
+    }
+    return null;
+  }
+
+  bool _isKnownSpecificPlacePhrase(String raw) {
+    final n = _normalizeSearchText(raw);
+    if (n.isEmpty) return false;
+    for (final name in _famousPlaces) {
+      if (_normalizeSearchText(name) == n) return true;
+    }
+    for (final e in _aliases.entries) {
+      if (_normalizeSearchText(e.key) == n) return true;
+      for (final a in e.value) {
+        if (_normalizeSearchText(a) == n) return true;
+      }
+    }
+    return false;
+  }
+
+  bool _outingResultAcceptableForCategorySearch(Landmark lm) {
+    if (PlaceSearchPipeline.isVerifiedVisitorOutingLandmark(lm)) return true;
+    final c = PlaceCategoryNormalizer.normalize(lm.category, contextText: lm.name);
+    if (c != 'outing') return false;
+    final osmClass = (lm.sources?['osm_class'] ?? lm.sources?['class'] ?? '').toString();
+    final osmType = (lm.sources?['osm_type'] ?? lm.sources?['type'] ?? '').toString();
+    return PlaceSearchPipeline.isVerifiedVisitorOutingCandidate(
+      name: lm.name,
+      displayName: '${lm.shortDescription} ${lm.address}',
+      osmClass: osmClass,
+      osmType: osmType,
+    );
+  }
+
+  Future<Landmark?> _geminiSuggestNamedPlace({
+    required String rawQuery,
+    String? cityHint,
+    String? categoryHint,
+  }) async {
+    final primaryKey = AppConfig.geminiApiKey.trim();
+    final fallbackKey = AppConfig.geminiFallbackApiKey.trim();
+    final model = AppConfig.geminiModel.trim();
+
+    if (primaryKey.isEmpty || model.isEmpty) return null;
+
+    Uri geminiUri(String apiKey) => Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/'
+      '$model:generateContent?key=$apiKey',
+    );
+
+    final cleanCityHint = cityHint?.trim() ?? '';
+    final cityHintIsGlobal = cleanCityHint.isEmpty;
+
+    final prompt = '''
+You are a strict Egyptian tourism place resolver.
+
+Your task:
+Resolve exactly ONE specific real place in Egypt from the user's search query.
+
+User query:
+"${rawQuery.trim()}"
+
+City hint:
+"${cityHintIsGlobal ? 'NO_CITY_HINT' : cleanCityHint}"
+
+Category hint:
+"${categoryHint ?? 'unknown'}"
+
+Allowed scope:
+You ONLY resolve real places in Egypt that belong to ONE of these five categories:
+- tourist
+- outing
+- hotel
+- restaurant
+- cafe
+
+Category meanings:
+- tourist: landmarks, museums, historical sites, temples, monuments, palaces, citadels, mosques, churches, monasteries, tourist attractions
+- outing: visitor-friendly places such as beaches, parks, gardens, malls, marinas, promenades, corniches, entertainment places, markets, bazaars, lakes, oases, islands, bays, reefs, diving or snorkeling places
+- hotel: hotels, resorts, hostels
+- restaurant: restaurants and food places
+- cafe: cafes and coffee shops
+
+Out-of-scope inputs:
+Reject anything outside the five allowed categories.
+Examples:
+- hospitals
+- clinics
+- schools
+- universities
+- offices
+- companies
+- residential compounds
+- streets as standalone places
+- random services
+- political places or events
+- medical places
+- programming, technical, personal, school, or general knowledge topics
+- incidents, wars, attacks, news, or events
+- fictional, vague, or unknown places
+
+If the user query is outside the allowed categories:
+Do NOT create a place.
+Do NOT invent a related tourist place.
+Return this empty rejected JSON object:
+{
+  "name": "",
+  "displayName": "",
+  "city": "",
+  "lat": 0,
+  "lng": 0,
+  "category": "tourist",
+  "address": "",
+  "aliases": [],
+  "shortDescription": "",
+  "confidence": 0.0,
+  "reason": "out_of_scope"
+}
+
+Matching rules:
+1. Return exactly ONE real Egyptian place only.
+2. The place must strongly match the user's query by official name, common name, alias, Arabic name, transliteration, or spelling variation.
+3. Do NOT return unrelated famous places.
+4. Do NOT return generic city attractions unless the query clearly refers to them.
+5. Do NOT invent places, coordinates, addresses, categories, aliases, or names.
+6. If the query is ambiguous, fictional, too vague, not tourism-related, or you cannot identify a real place confidently, return the empty rejected JSON object.
+7. If a city hint is provided, use it only if it does not contradict the real location of the place.
+8. If no city hint is provided, infer the most likely Egyptian city/governorate from the exact place name.
+9. If you cannot confidently infer the city, return the empty rejected JSON object.
+10. Coordinates must be inside Egypt and reasonably accurate.
+11. If coordinates are unknown, return the empty rejected JSON object.
+12. Confidence must reflect certainty:
+   - 0.80 to 1.00: exact known place
+   - 0.55 to 0.79: likely match
+   - 0.35 to 0.54: weak match, needs review
+   - below 0.35: uncertain, unknown, or rejected
+13. Return JSON only.
+14. Do not include markdown.
+15. Do not include explanations outside JSON.
+16. Do not wrap the JSON in code fences.
+17. Do not return arrays.
+18. Do not return multiple places.
+
+Required JSON schema:
+{
+  "name": "",
+  "displayName": "",
+  "city": "",
+  "lat": 0,
+  "lng": 0,
+  "category": "tourist|outing|hotel|restaurant|cafe",
+  "address": "",
+  "aliases": [],
+  "shortDescription": "",
+  "confidence": 0.0,
+  "reason": ""
+}
+
+Field rules:
+- name: official or most common English name.
+- displayName: user-friendly display name. If unknown, use the same value as name.
+- city: Egyptian city/governorate where the place actually belongs.
+- lat: real latitude inside Egypt only.
+- lng: real longitude inside Egypt only.
+- category: exactly one of tourist, outing, hotel, restaurant, cafe.
+- address: short address or area if known.
+- aliases: alternative names, Arabic names, transliterations, or spelling variations.
+- shortDescription: one short sentence about the place.
+- confidence: numeric value from 0.0 to 1.0.
+- reason: short reason why this place matches or why it was rejected.
+
+Return only valid compact JSON.
+''';
+
+    try {
+      final uriNamed = geminiUri(primaryKey);
+
+      final res = await http
+          .post(
+            uriNamed,
+            headers: {'Content-Type': 'application/json'},
+
+            body: jsonEncode({
+              'contents': [
+                {
+                  'parts': [
+                    {'text': prompt},
+                  ],
+                },
+              ],
+              'generationConfig': {
+                'temperature': 0.2,
+                'maxOutputTokens': 512,
+                'responseMimeType': 'application/json',
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 28));
+
+      if (res.statusCode != 200) {
+        if (kDebugMode) {
+          debugPrint('[SearchEngine] Gemini named place HTTP ${res.statusCode}');
+        }
+        return null;
+      }
+
+      final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+      final text = _extractGeminiJsonText(decoded);
+      if (text.trim().isEmpty) return null;
+
+      final map = jsonDecode(text) as Map<String, dynamic>;
+      final name = (map['name'] ?? '').toString().trim();
+      final city = (map['city'] ?? '').toString().trim();
+      final displayName = (map['displayName'] ?? '').toString().trim();
+final shortDescription = (map['shortDescription'] ?? '').toString().trim();
+final reason = (map['reason'] ?? '').toString().trim();
+
+final aliases = <String>[];
+final rawAliases = map['aliases'];
+if (rawAliases is List) {
+  for (final a in rawAliases) {
+    final clean = a.toString().trim();
+    if (clean.isNotEmpty) aliases.add(clean);
+  }
+}
+      final lat = (map['lat'] is num) ? (map['lat'] as num).toDouble() : double.tryParse('${map['lat']}') ?? 0;
+      final lng = (map['lng'] is num) ? (map['lng'] as num).toDouble() : double.tryParse('${map['lng']}') ?? 0;
+      final catRaw = (map['category'] ?? 'tourist').toString();
+      final address = (map['address'] ?? '').toString().trim();
+      final conf = (map['confidence'] is num) ? (map['confidence'] as num).toDouble() : double.tryParse('${map['confidence']}') ?? 0;
+
+      if (name.isEmpty || city.isEmpty || city.toLowerCase() == 'egypt' || conf < 0.42) {
+        return null;
+      }
+      if (lat == 0 || lng == 0) return null;
+
+      final cat = PlaceCategoryNormalizer.normalize(catRaw, contextText: name);
+      if (!PlaceCategoryNormalizer.allowed.contains(cat)) return null;
+
+      final lm = Landmark(
+  id: '',
+  name: name,
+  displayName: displayName.isNotEmpty ? displayName : name,
+  normalizedName: PlaceSearchPipeline.normalizeSearchQuery(name),
+  aliases: aliases,
+  cityId: '',
+  city: city,
+  category: cat,
+  description: shortDescription.isNotEmpty
+      ? shortDescription
+      : address.isNotEmpty
+          ? address
+          : name,
+  shortDescription: shortDescription.isNotEmpty
+      ? shortDescription
+      : address.isNotEmpty
+          ? address
+          : name,
+  fullDescription: '',
+  history: '',
+  imageUrl: '',
+  mediaUrls: const [],
+  lat: lat,
+  lng: lng,
+  address: address.isNotEmpty ? address : city,
+  rating: 0,
+  openingHours: '',
+  location: '$lat, $lng',
+  ticketPrice: null,
+  wikipediaUrl: null,
+  createdAt: DateTime.now(),
+  generatedBySearch: true,
+  sources: {
+    'provider': 'gemini_place_suggest',
+    'confidence': conf.toString(),
+    if (reason.isNotEmpty) 'reason': reason,
+    'promptVersion': 'named_place_strict_v2',
+  },
+);
+
+      if (!_looksEgyptianPlace('${lm.name} ${lm.city}', lm.city)) return null;
+      if (_isBlockedNonPlaceResult(name: lm.name, displayName: lm.description, category: lm.category)) {
+        return null;
+      }
+      if (!_filterNamedPlacesStrict(
+        candidates: [lm],
+        rawQuery: rawQuery,
+        cityIntent: cityHint,
+        maxKeep: 1,
+      ).isNotEmpty) {
+        return null;
+      }
+      return lm;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[SearchEngine] Gemini named place error: $e');
+      return null;
+    }
+  }
+
+  String _extractGeminiJsonText(Map<String, dynamic> body) {
+    final candidates = body['candidates'] as List? ?? const [];
+    if (candidates.isEmpty) return '';
+    final buf = StringBuffer();
+    for (final c in candidates) {
+      if (c is! Map) continue;
+      final content = c['content'] as Map? ?? {};
+      for (final part in (content['parts'] as List? ?? const [])) {
+        if (part is Map && part['text'] != null) buf.write(part['text']);
+      }
+    }
+    return buf.toString().trim();
+  }
+
+  Future<List<Landmark>> _geminiSuggestCategoryPlaces({
+    required String category,
+    required String cityName,
+    required String rawQuery,
+    required int maxResults,
+  }) async {
+    if (!AppConfig.hasValidGeminiKey) return [];
+    final key = AppConfig.geminiApiKey.trim();
+    final model = AppConfig.geminiModel.trim();
+    if (key.isEmpty || model.isEmpty) return [];
+
+    final uri = Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/'
+      '$model:generateContent?key=$key',
+    );
+
+    final outingNote = category == 'outing'
+        ? 'Only visitor-friendly outings: beaches, parks, gardens, malls, marinas, promenades, markets, entertainment. No hospitals, schools, offices, streets, or residential compounds.'
+        : '';
+
+    final prompt =
+        'List real or well-known $category places in $cityName, Egypt. $outingNote\n'
+        'User query context: "${rawQuery.trim()}".\n'
+        'Return JSON: {"places":[{"name":"","lat":0,"lng":0,"address":"","confidence":0.8}]}\n'
+        'Max ${math.min(maxResults, 10)} items. Omit uncertain rows (confidence < 0.5). '
+        'Coordinates must be in Egypt near $cityName.';
+
+    try {
+      final res = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'contents': [
+                {
+                  'parts': [
+                    {'text': prompt},
+                  ],
+                },
+              ],
+              'generationConfig': {
+                'temperature': 0.35,
+                'maxOutputTokens': 2048,
+                'responseMimeType': 'application/json',
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 35));
+
+      if (res.statusCode != 200) return [];
+
+      final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+      final text = _extractGeminiJsonText(decoded);
+      if (text.isEmpty) return [];
+
+      final map = jsonDecode(text) as Map<String, dynamic>;
+      final list = (map['places'] as List?) ?? const [];
+      final out = <Landmark>[];
+      for (final item in list) {
+        if (item is! Map) continue;
+        final m = Map<String, dynamic>.from(item);
+        final name = (m['name'] ?? '').toString().trim();
+        final lat = (m['lat'] is num) ? (m['lat'] as num).toDouble() : double.tryParse('${m['lat']}') ?? 0;
+        final lng = (m['lng'] is num) ? (m['lng'] as num).toDouble() : double.tryParse('${m['lng']}') ?? 0;
+        final address = (m['address'] ?? '').toString().trim();
+        final conf = (m['confidence'] is num) ? (m['confidence'] as num).toDouble() : 0.75;
+        if (name.isEmpty || lat == 0 || lng == 0 || conf < 0.45) continue;
+
+        final lm = Landmark(
+          id: '',
+          name: name,
+          cityId: '',
+          city: cityName.trim(),
+          category: category,
+          description: address.isNotEmpty ? address : name,
+          shortDescription: address.isNotEmpty ? address : name,
+          fullDescription: '',
+          history: '',
+          imageUrl: '',
+          mediaUrls: const [],
+          lat: lat,
+          lng: lng,
+          address: address.isNotEmpty ? address : cityName,
+          rating: 0,
+          openingHours: '',
+          location: '$lat, $lng',
+          ticketPrice: null,
+          wikipediaUrl: null,
+          createdAt: DateTime.now(),
+          generatedBySearch: true,
+          sources: {
+            'provider': 'gemini_category_suggest',
+            'confidence': conf.toString(),
+          },
+        );
+
+        if (!PlaceCategoryNormalizer.isAllowed(lm.category, contextText: lm.name)) continue;
+        if (_isBlockedNonPlaceResult(name: lm.name, displayName: lm.description, category: category)) {
+          continue;
+        }
+        if (category == 'outing' && !PlaceSearchPipeline.isVerifiedVisitorOutingCandidate(
+              name: lm.name,
+              displayName: lm.description,
+              osmClass: '',
+              osmType: '',
+            )) {
+          continue;
+        }
+        out.add(lm);
+        if (out.length >= maxResults) break;
+      }
+      return out;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[SearchEngine] Gemini category error: $e');
+      return [];
+    }
+  }
 
   static const Set<String> _providerGeneratedCategories = {
     'hotel',
@@ -233,9 +801,10 @@ class SearchEngine {
     'alexandria governorate': 'Alexandria',
     'siwa': 'Siwa',
     'سيوة': 'Siwa',
-    'matrouh': 'Siwa',
-    'marsa matrouh': 'Siwa',
-    'matrouh governorate': 'Siwa',
+    'matrouh': 'Matrouh',
+    'marsa matrouh': 'Matrouh',
+    'marsa matruh': 'Matrouh',
+    'matrouh governorate': 'Matrouh',
     'dahab': 'Dahab',
     'دهب': 'Dahab',
     'sharm': 'Sharm El Sheikh',
@@ -317,35 +886,65 @@ class SearchEngine {
     if (trimmed.isEmpty) return SearchResult.empty;
 
     if (_isUnsupportedUserQuery(trimmed)) {
-      print('[SearchEngine] rejected unsupported query outside app categories: $trimmed');
+      if (kDebugMode) {
+        debugPrint('[SearchEngine] rejected unsupported query outside app categories: $trimmed');
+      }
       return SearchResult(
         correctedQuery: trimmed,
         results: const [],
         suggestions: const [],
+        resultSources: const [],
       );
     }
 
     final index = await _getIndex();
-    final corrected = _resolveCorrectedQuery(trimmed, index);
+    final firebaseDocIds =
+        index.map((e) => e.id.trim()).where((e) => e.isNotEmpty).toSet();
+
+    final normalizedForSearch = PlaceSearchPipeline.normalizeSearchQuery(trimmed);
+
+    PlaceSearchPipeline.debugLog(
+      'search raw="$trimmed" normalized="$normalizedForSearch" '
+      'firebaseIndex=${index.length}',
+    );
+    final corrected = _resolveCorrectedQuery(normalizedForSearch, index);
     final resolvedCityFromQuery = _resolveCity('$trimmed $corrected', null);
-    final detectedCategory = _detectCategory('$trimmed $corrected');
-
-    // City can come either from the query itself or from the dropdown.
-    // IMPORTANT: the city typed in the query must win over the dropdown.
-    // Example: dropdown = "All Egypt" and query = "cafes in cairo"
-    // should search Cairo, not All Egypt. This was the reason category searches
-    // were returning very few/no results.
+    final cityIntent = PlaceSearchPipeline.extractCityIntentFromQuery(trimmed) ??
+        resolvedCityFromQuery;
     final selectedCityName = _isGlobalCitySelection(cityName) ? null : cityName?.trim();
-    final effectiveCategoryCity = (resolvedCityFromQuery ?? '').trim().isNotEmpty
-        ? resolvedCityFromQuery
-        : selectedCityName;
 
-    final isCategoryQuery = detectedCategory != null &&
-        _isGenericCategoryQuery(
-          trimmed,
-          detectedCategory,
-          effectiveCategoryCity,
-        );
+    final listingMatch = _tryParseCategoryListingQuery(trimmed);
+    final listingEffective = (listingMatch != null && !_isKnownSpecificPlacePhrase(trimmed))
+        ? listingMatch
+        : null;
+
+    final detectedCategoryLoose = _detectCategory('$trimmed $corrected');
+    final detectedCategory = listingEffective?.category ?? detectedCategoryLoose;
+
+    String? effectiveCategoryCity;
+    if (listingEffective != null) {
+      final seg = listingEffective.citySegment.trim();
+      effectiveCategoryCity = _canonicalCityName(seg) ?? _resolveCity(seg, null) ?? seg;
+      if (effectiveCategoryCity.trim().toLowerCase() == 'egypt') {
+        effectiveCategoryCity = null;
+      }
+    }
+    effectiveCategoryCity ??= () {
+      if ((cityIntent ?? '').trim().isNotEmpty) return cityIntent;
+      if ((resolvedCityFromQuery ?? '').trim().isNotEmpty) {
+        return resolvedCityFromQuery;
+      }
+      return selectedCityName;
+    }();
+
+    final isCategoryQuery = listingEffective != null ||
+        (detectedCategoryLoose != null &&
+            _isGenericCategoryQuery(
+              trimmed,
+              detectedCategoryLoose,
+              effectiveCategoryCity,
+              cityIntent: cityIntent,
+            ));
 
     // IMPORTANT:
     // Selected/typed city filters only category searches (cafes/restaurants/hotels).
@@ -353,13 +952,25 @@ class SearchEngine {
     final shouldUseCityFilter = isCategoryQuery &&
         (effectiveCategoryCity ?? '').trim().isNotEmpty;
 
+    // If the query names a different city than the dropdown, do not filter by the stale cityId.
+    var effectiveCityId = cityId;
+    if (shouldUseCityFilter &&
+        (cityIntent ?? '').trim().isNotEmpty &&
+        (selectedCityName ?? '').trim().isNotEmpty &&
+        _normalizeSearchText(cityIntent!) !=
+            _normalizeSearchText(selectedCityName!)) {
+      effectiveCityId = null;
+    }
+
     // Category searches need more than the normal single-place result limit.
     // Example: "cafes in cairo" should return a useful list, not 3-4 items.
     final effectiveMaxResults = isCategoryQuery ? math.max(maxResults, 30) : maxResults;
 
     final filtered = _applyFilters(
       index,
-      cityId: shouldUseCityFilter && (cityId ?? '').trim().isNotEmpty ? cityId : null,
+      cityId: shouldUseCityFilter && (effectiveCityId ?? '').trim().isNotEmpty
+          ? effectiveCityId
+          : null,
       cityName: shouldUseCityFilter ? effectiveCategoryCity : null,
       category: isCategoryQuery ? detectedCategory : null,
     );
@@ -368,11 +979,14 @@ class SearchEngine {
       query: corrected,
       rawQuery: trimmed,
       landmarks: filtered,
-      cityHint: shouldUseCityFilter ? effectiveCategoryCity : resolvedCityFromQuery,
+      cityHint: shouldUseCityFilter
+          ? effectiveCategoryCity
+          : (cityIntent ?? resolvedCityFromQuery),
       categoryHint: isCategoryQuery ? detectedCategory : null,
     );
 
     var results = ranked.take(effectiveMaxResults).toList();
+    final firebaseMatchesCount = ranked.length;
 
     // For generic category searches like "tourists in cairo", the user expects
     // all already-saved matching places from Firebase, not only items whose name
@@ -383,7 +997,7 @@ class SearchEngine {
         index,
         category: detectedCategory,
         cityName: effectiveCategoryCity,
-        cityId: cityId,
+        cityId: effectiveCityId,
       );
       if (savedCategoryResults.isNotEmpty) {
         results = _mergeSearchResults(
@@ -430,18 +1044,63 @@ class SearchEngine {
           generatedFromNearbyFuture,
         ]);
 
-        print('[SearchEngine] category Nominatim results=${providerResults[0].length}, Overpass results=${providerResults[1].length} for "$trimmed"');
+        if (kDebugMode) {
+          debugPrint(
+            '[SearchEngine] category Nominatim results=${providerResults[0].length}, '
+            'Overpass results=${providerResults[1].length} for "$trimmed"',
+          );
+        }
 
-        final generated = _mergeSearchResults(
+        var generated = _mergeSearchResults(
           providerResults[0],
           providerResults[1],
           trimmed,
         );
 
+        var providerFallbackAttemptedCat = false;
+        var aiFallbackAttemptedCat = false;
+
+        // Category searches should not stop at only 1-2 useful results.
+        // Order must stay: Firebase first, API/provider results second,
+        // and Gemini only as the LAST fallback if both are still not enough.
+        final minUsefulCategoryResults = math.min(effectiveMaxResults, 10);
+
+        final combinedCategoryCount = _mergeSearchResults(
+          results,
+          generated,
+          trimmed,
+        ).length;
+
+        if (combinedCategoryCount < minUsefulCategoryResults &&
+            categoryCity.trim().isNotEmpty &&
+            AppConfig.hasValidGeminiKey) {
+          providerFallbackAttemptedCat = true;
+
+          final ai = await _geminiSuggestCategoryPlaces(
+            category: detectedCategory,
+            cityName: categoryCity,
+            rawQuery: trimmed,
+            maxResults: effectiveMaxResults,
+          );
+
+          if (ai.isNotEmpty) {
+            aiFallbackAttemptedCat = true;
+            generated = _mergeSearchResults(
+              generated,
+              ai,
+              trimmed,
+            );
+          }
+        }
+
         if (generated.isNotEmpty) {
-          results = _mergeSearchResults(generated, results, trimmed)
+          var mergedGen = _mergeSearchResults(generated, results, trimmed)
               .take(effectiveMaxResults)
               .toList();
+          if (detectedCategory == 'outing') {
+            mergedGen = mergedGen.where(_outingResultAcceptableForCategorySearch).toList();
+          }
+          results = mergedGen;
 
           // Show results immediately, then save generated provider results in
           // Firebase in the background so the next search can load them from
@@ -455,27 +1114,15 @@ class SearchEngine {
 
           _clearIndex();
         }
-      }
-    }
 
-    final strongFirst = results.isNotEmpty && _isStrongMatch(results.first, trimmed);
-
-    if (!isCategoryQuery && !strongFirst) {
-      final generated = await _generateSinglePlaceFromProviders(
-        query: corrected,
-        rawQuery: trimmed,
-        category: detectedCategory,
-        selectedCityName: cityName,
-        existingResults: results,
-      );
-
-      if (generated != null && !_containsEquivalent(results, generated)) {
-        final saved = await _safePersistAndReturn(generated);
-        final finalPlace = saved ?? generated;
-        results = _mergeSearchResults([finalPlace], results, trimmed)
-            .take(maxResults)
-            .toList();
-        _clearIndex();
+        if (kDebugMode) {
+          debugPrint(
+            '[SearchPipeline] categoryProviders '
+            'providerFallbackAttempted=$providerFallbackAttemptedCat '
+            'aiFallbackAttempted=$aiFallbackAttemptedCat '
+            'mergedGenerated=${generated.length}',
+          );
+        }
       }
     }
 
@@ -487,11 +1134,256 @@ class SearchEngine {
     // This keeps image search, hero tags, and card rendering stable.
     results = _withEnglishDisplayNames(results);
 
+    final isNamedPlaceSearch = !isCategoryQuery;
+    var fallbackGenerationAttempted = false;
+    var providerFallbackAttempted = false;
+    var aiFallbackAttempted = false;
+    var savedToFirebase = false;
+    var saveReason = 'n/a';
+    var generatedValidityNote = 'n/a';
+
+    var relevantMatches = results.length;
+    var namedPlacePreStrictCount = 0;
+    var strictMatches = 0;
+
+    if (isNamedPlaceSearch) {
+      namedPlacePreStrictCount = results.length;
+      results = _filterNamedPlacesStrict(
+        candidates: results,
+        rawQuery: trimmed,
+        cityIntent: cityIntent,
+        maxKeep: effectiveMaxResults,
+      );
+      relevantMatches = results.length;
+      strictMatches = results.length;
+      if (kDebugMode) {
+        debugPrint(
+          '[SearchPipeline] namedPlacePreStrict=$namedPlacePreStrictCount '
+          'namedPlaceStrict=${results.length}',
+        );
+      }
+    } else if (isCategoryQuery && detectedCategory == 'outing') {
+      results = results.where(_outingResultAcceptableForCategorySearch).toList();
+      relevantMatches = results.length;
+    }
+
+    if (isNamedPlaceSearch && results.isEmpty) {
+      fallbackGenerationAttempted = true;
+
+      final logSelectedCity = cityName ?? '';
+      final logCityIntent = cityIntent ?? '';
+      PlaceSearchPipeline.debugLog(
+        '[NamedFallback] started query="$trimmed" '
+        'selectedCity="$logSelectedCity" cityIntent="$logCityIntent"',
+      );
+
+      // -----------------------------
+      // Stage 1: provider/OSM/Wiki/Gemini (existing)
+      // -----------------------------
+      var generated = await _generateSinglePlaceFromProviders(
+        query: corrected,
+        rawQuery: trimmed,
+        category: detectedCategory,
+        selectedCityName: cityName,
+        existingResults: const [],
+      );
+
+      PlaceSearchPipeline.debugLog(
+        '[NamedFallback] providerResult=${generated == null ? 'null' : '${generated.name} / ${generated.city} / ${generated.category} / provider=${generated.sources?['provider'] ?? ''}'}',
+      );
+
+      if (generated != null &&
+          (generated.sources?['provider'] ?? '').toString() == 'gemini_place_suggest') {
+        aiFallbackAttempted = true;
+        providerFallbackAttempted = true;
+      } else if (generated == null) {
+        providerFallbackAttempted = true;
+      }
+
+      // -----------------------------
+      // Stage 2: second-stage AI draft fallback when provider stage failed
+      // -----------------------------
+      if (generated == null) {
+        // City resolution: cityIntent wins, else dropdown cityName, else infer.
+        var effectiveCity = (cityIntent ?? '').trim();
+        if (effectiveCity.isEmpty) {
+          effectiveCity = (cityName ?? '').trim();
+        }
+        if (effectiveCity.isEmpty) {
+          // Infer from query text.
+          effectiveCity = _resolveCity('$trimmed $corrected', null) ?? '';
+        }
+
+        // Final guard: never save under unknown when we have a selected context.
+        // If we truly cannot resolve, we still allow AI draft but validation will reject.
+        if (kDebugMode) {
+          debugPrint(
+            '[NamedFallback] stage2 cityResolved="$effectiveCity" (selectedCity="$logSelectedCity" cityIntent="$logCityIntent")',
+          );
+        }
+
+        aiFallbackAttempted = true;
+
+        // Detect category intent if the query includes a category word.
+        final catIntent = detectedCategory;
+
+        final aiDraft = await _geminiSuggestNamedPlace(
+          rawQuery: trimmed,
+          cityHint: effectiveCity.isNotEmpty ? effectiveCity : null,
+          categoryHint: catIntent,
+        );
+
+        if (aiDraft != null) {
+          // Validate against the original query tokens/name/aliases.
+          final sem = SemanticScorer.scoreSingle(query: trimmed, landmark: aiDraft);
+          final fuzzy = _looseNameScore(aiDraft.name, trimmed);
+          final strictLike = _filterNamedPlacesStrict(
+            candidates: [aiDraft],
+            rawQuery: trimmed,
+            cityIntent: cityIntent,
+            maxKeep: 1,
+          );
+
+          // Confidence handling:
+          // - If semantic/fuzzy is strong, accept for saving.
+          // - Else downgrade to needsReview and allow persistence only if still passes validation.
+          final confFromSources = (aiDraft.sources?['confidence'] ?? '').toString();
+          final confNum = double.tryParse(confFromSources) ?? 0.0;
+          final plausible = sem.score >= 2.6 || fuzzy >= 0.44;
+
+          var validated = aiDraft;
+          final willNeedReview = !(plausible && strictLike.isNotEmpty && confNum >= 0.42);
+
+          validated = validated.copyWith(
+            generatedBySearch: true,
+            needsReview: willNeedReview,
+            // keep category limited by provider normalization already done in generator.
+            sources: {
+              ...(validated.sources ?? const <String, dynamic>{}),
+              'sourceMetadata': 'named_search_ai_draft_stage2',
+              'confidence': confNum.toString(),
+            },
+          );
+
+          final aiReason = willNeedReview
+              ? 'low_confidence_but_plausible sem=${sem.score.toStringAsFixed(1)} fuzzy=${fuzzy.toStringAsFixed(2)} conf=$confNum'
+              : 'high_confidence sem=${sem.score.toStringAsFixed(1)} fuzzy=${fuzzy.toStringAsFixed(2)} conf=$confNum';
+
+          PlaceSearchPipeline.debugLog(
+            '[NamedFallback] aiGenerated=true reason=$aiReason city=${validated.city}',
+          );
+
+          generatedValidityNote =
+              'semantic=${sem.score.toStringAsFixed(1)} fuzzy=${fuzzy.toStringAsFixed(2)} $aiReason';
+
+          // Persistence (still guarded by _safePersistAndReturn).
+          // For low confidence, keep relaxNameRelevance=false so garbage fails validation.
+          final relaxGemini =
+              (validated.sources?['provider'] ?? '').toString() == 'gemini_place_suggest' && !willNeedReview;
+
+          final saved = await _safePersistAndReturn(
+            validated,
+            rawQuery: trimmed,
+            markGenerated: true,
+            relaxNameRelevance: relaxGemini,
+          );
+
+          savedToFirebase = saved != null;
+          saveReason = savedToFirebase
+              ? 'persisted'
+              : 'verification_or_validation_failed';
+
+          PlaceSearchPipeline.debugLog(
+            '[NamedFallback] accepted=${savedToFirebase ? 'true' : 'false'} reason=$saveReason savedToFirebase=$savedToFirebase docId=${saved?.id ?? ''}',
+          );
+
+          if (saved != null) {
+            results = _mergeSearchResults([saved], const [], trimmed)
+                .take(maxResults)
+                .toList();
+            _clearIndex();
+          } else {
+            // If saving failed, do not return random unrelated results.
+            results = const [];
+            generatedValidityNote = 'stage2_persist_failed';
+          }
+        } else {
+          PlaceSearchPipeline.debugLog(
+            '[NamedFallback] aiGenerated=false reason=no_gemini_named_place_result',
+          );
+          generatedValidityNote = 'no_provider_or_ai_result';
+        }
+      } else {
+        // Stage 1 success: keep existing behavior.
+        final sem = SemanticScorer.scoreSingle(query: trimmed, landmark: generated);
+        final fuzzy = _looseNameScore(generated.name, trimmed);
+        generatedValidityNote =
+            'semantic=${sem.score.toStringAsFixed(1)} fuzzy=${fuzzy.toStringAsFixed(2)} ${sem.matchReason}';
+        final relaxGemini =
+            (generated.sources?['provider'] ?? '').toString() == 'gemini_place_suggest';
+        final saved = await _safePersistAndReturn(
+          generated,
+          rawQuery: trimmed,
+          markGenerated: true,
+          relaxNameRelevance: relaxGemini,
+        );
+        savedToFirebase = saved != null;
+        saveReason = savedToFirebase
+            ? 'persisted'
+            : 'verification_or_validation_failed';
+        final finalPlace = saved ?? generated;
+        results = _mergeSearchResults([finalPlace], const [], trimmed)
+            .take(maxResults)
+            .toList();
+        _clearIndex();
+      }
+
+      final finalCityForLog = results.isNotEmpty
+          ? results.first.city
+          : (cityIntent ?? cityName ?? '');
+      PlaceSearchPipeline.debugLog(
+        '[NamedFallback] finalCity=${finalCityForLog ?? ''} finalCount=${results.length}',
+      );
+    }
+
+    // Final safety: never return the same visible place twice.
+    // This is especially important after a named-place fallback persists a
+    // provider result into an existing admin-edited Firestore document.
+    // The UI must receive the canonical saved document, not a transient
+    // provider/local duplicate with the same visible name.
+    results = _dedupeFinalSearchResults(results);
+
     final suggestions = await getHints(trimmed, cityName: cityName);
 
-    final detectedCityForResponse =
+
+    final detectedCityForResponse = cityIntent ??
         _detectedCityFromResults(results, '$trimmed $corrected') ??
-            resolvedCityFromQuery;
+        resolvedCityFromQuery;
+
+    if (kDebugMode) {
+      debugPrint(
+        '[SearchPipeline] originalQuery="$trimmed" '
+        'normalizedQuery="$normalizedForSearch" '
+        'selectedCity=${cityName ?? ''} '
+        'cityIntent=${cityIntent ?? ''} '
+        'categoryIntent=${detectedCategory ?? ''} '
+        'isNamedPlaceSearch=$isNamedPlaceSearch '
+        'isGenericCategoryQuery=$isCategoryQuery '
+        'firebaseMatchesCount=$firebaseMatchesCount '
+        'namedPlacePreStrict=$namedPlacePreStrictCount '
+        'strictMatches=$strictMatches '
+        'categoryMatches=${isCategoryQuery ? relevantMatches : 0} '
+        'relevantMatches=$relevantMatches '
+        'providerFallbackAttempted=$providerFallbackAttempted '
+        'aiFallbackAttempted=$aiFallbackAttempted '
+        'fallbackGenerationAttempted=$fallbackGenerationAttempted '
+        'generatedValidity=$generatedValidityNote '
+        'savedToFirebase=$savedToFirebase '
+        'saveReason=$saveReason '
+        'finalCount=${results.length} '
+        'finalCity=${detectedCityForResponse ?? ''}',
+      );
+    }
 
     return SearchResult(
       correctedQuery: corrected,
@@ -499,7 +1391,152 @@ class SearchEngine {
       suggestions: suggestions,
       detectedCity: detectedCityForResponse,
       detectedCategory: detectedCategory,
+      cityIntent: cityIntent,
+      isGenericCategoryQuery: isCategoryQuery,
+      resultSources: _tagResultSources(results, firebaseDocIds),
     );
+  }
+
+  static const Set<String> _namedPlaceStrictStopwords = {
+    'the', 'a', 'an', 'of', 'in', 'on', 'at', 'to', 'for', 'and', 'or', 'near',
+    'best', 'top', 'place', 'places', 'egypt', 'city', 'area', 'around',
+    'مصر', 'في', 'من', 'على', 'و', 'ال',
+  };
+
+  List<String> _criticalTokensNamedPlace(String rawQuery) {
+    final q = _normalizeSearchText(rawQuery);
+    if (q.isEmpty) return [];
+    return q
+        .split(RegExp(r'\s+'))
+        .map((e) => e.trim())
+        .where((t) => t.length >= 3 && !_namedPlaceStrictStopwords.contains(t))
+        .toList();
+  }
+
+  double _maxFuzzyAgainstNamedQuery(Landmark lm, String rawQuery) {
+    var best = _looseNameScore(lm.name, rawQuery);
+    final dn = lm.displayName.trim();
+    if (dn.isNotEmpty) best = math.max(best, _looseNameScore(dn, rawQuery));
+    final nn = lm.normalizedName.trim();
+    if (nn.isNotEmpty) best = math.max(best, _looseNameScore(nn, rawQuery));
+    for (final a in lm.aliases) {
+      final t = a.trim();
+      if (t.isNotEmpty) best = math.max(best, _looseNameScore(t, rawQuery));
+    }
+    return best;
+  }
+
+  double _criticalTokenCoverage(Landmark lm, List<String> critical) {
+    if (critical.isEmpty) return 1.0;
+    final hay = _normalizeSearchText(
+      '${lm.name} ${lm.displayName} ${lm.normalizedName} ${lm.aliases.join(' ')}',
+    );
+    var hits = 0;
+    for (final t in critical) {
+      if (hay.contains(t)) hits++;
+    }
+    return hits / critical.length;
+  }
+
+  double _phraseCoverage(Landmark lm, String qNorm) {
+    if (qNorm.length < 4) return 0;
+    final n = _normalizeSearchText(
+      '${lm.name} ${lm.displayName} ${lm.normalizedName}',
+    );
+    if (n.isEmpty) return 0;
+    if (n.contains(qNorm) || qNorm.contains(n)) return 1.0;
+    final qParts = qNorm.split(' ').where((e) => e.length > 2).toList();
+    if (qParts.isEmpty) return 0;
+    var hit = 0;
+    for (final p in qParts) {
+      if (n.contains(p)) hit++;
+    }
+    return hit / qParts.length;
+  }
+
+  /// Strict named-entity filter: rejects "same city / same category" matches
+  /// that do not match the actual place name the user typed.
+  List<Landmark> _filterNamedPlacesStrict({
+    required List<Landmark> candidates,
+    required String rawQuery,
+    required String? cityIntent,
+    required int maxKeep,
+  }) {
+    if (candidates.isEmpty) return candidates;
+
+    final critical = _criticalTokensNamedPlace(rawQuery);
+    final qNorm = _normalizeSearchText(rawQuery);
+    final accepted = <Landmark>[];
+
+    for (final lm in candidates) {
+      final fuzzy = _maxFuzzyAgainstNamedQuery(lm, rawQuery);
+      final critCov = _criticalTokenCoverage(lm, critical);
+      final phrase = _phraseCoverage(lm, qNorm);
+
+      final minCrit = critical.isEmpty
+          ? 1.0
+          : critical.length <= 2
+              ? 1.0
+              : 0.72;
+
+      final strongName = fuzzy >= 0.78;
+      final goodBundle =
+          critCov >= minCrit && fuzzy >= 0.55 && (phrase >= 0.55 || fuzzy >= 0.66);
+      final decentWithPhrase = fuzzy >= 0.62 && phrase >= 0.72;
+
+      var pass = strongName || goodBundle || decentWithPhrase;
+
+      if (pass && critical.length >= 2 && critCov < 0.45 && fuzzy < 0.72) {
+        pass = false;
+      }
+
+      if (pass) {
+        final cat = PlaceCategoryNormalizer.normalize(
+          lm.category,
+          contextText: lm.name,
+        );
+        if (cat == 'outing' &&
+            !PlaceSearchPipeline.isVerifiedVisitorOutingLandmark(lm)) {
+          pass = false;
+        }
+      }
+
+      if (kDebugMode) {
+        final reason = pass
+            ? 'accepted'
+            : 'rejected: need stronger name/phrase match for named-place query';
+        debugPrint(
+          '[NamedPlaceRelevance] query="$rawQuery" place="${lm.name}" '
+          'fuzzy=${fuzzy.toStringAsFixed(3)} tokenCov=${critCov.toStringAsFixed(3)} '
+          'phrase=${phrase.toStringAsFixed(3)} -> $reason',
+        );
+      }
+
+      if (pass) accepted.add(lm);
+    }
+
+    return accepted.take(maxKeep).toList();
+  }
+
+  List<PlaceResultSource> _tagResultSources(
+    List<Landmark> list,
+    Set<String> firebaseDocIds,
+  ) {
+    return list.map((lm) {
+      if (lm.generatedBySearch) {
+        return PlaceResultSource.generatedBySearch;
+      }
+      final id = lm.id.trim();
+      if (id.isNotEmpty &&
+          !id.startsWith('overpass_') &&
+          firebaseDocIds.contains(id)) {
+        return PlaceResultSource.fromFirebase;
+      }
+      if (id.isEmpty || id.startsWith('overpass_')) {
+        return PlaceResultSource.generatedBySearch;
+      }
+      return PlaceResultSource.fromFirebase;
+    }).toList();
   }
 
   String? _detectedCityFromResults(List<Landmark> results, String queryText) {
@@ -630,6 +1667,10 @@ class SearchEngine {
         displayName: '${lm.description} ${lm.shortDescription} ${lm.address}',
         category: lm.category,
       )) {
+        continue;
+      }
+      if (normalizedCategory == 'outing' &&
+          !PlaceSearchPipeline.isVerifiedVisitorOutingLandmark(lm)) {
         continue;
       }
 
@@ -799,6 +1840,16 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
         )) {
           continue;
         }
+        if (PlaceCategoryNormalizer.normalize(category) == 'outing' &&
+            !PlaceSearchPipeline.isVerifiedVisitorOutingLandmark(lm) &&
+            !PlaceSearchPipeline.isVerifiedVisitorOutingCandidate(
+              name: lm.name,
+              displayName: '${lm.description} ${lm.address}',
+              osmClass: (lm.sources?['osmClass'] ?? lm.sources?['class'] ?? '').toString(),
+              osmType: (lm.sources?['osmCategory'] ?? lm.sources?['type'] ?? '').toString(),
+            )) {
+          continue;
+        }
 
         if (!_isAcceptableCategoryResultName(
           category: category,
@@ -836,6 +1887,7 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
     final seen = <String>{};
 
     for (final lm in list) {
+      if (lm.hidden || lm.isDuplicate || lm.invalidPlace) continue;
       if (lm.name.trim().isEmpty) continue;
       if (_isUnsupportedPlaceText(
         '${lm.name} ${lm.category} ${lm.description} ${lm.shortDescription} ${lm.address}',
@@ -898,6 +1950,7 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
         : PlaceCategoryNormalizer.normalize(category);
 
     return index.where((lm) {
+      if (lm.hidden || lm.isDuplicate || lm.invalidPlace) return false;
       if (cityIdLower.isNotEmpty && lm.cityId.trim().toLowerCase() != cityIdLower) {
         return false;
       }
@@ -940,6 +1993,9 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       final desc = _normalizeSearchText(
         '${lm.shortDescription} ${lm.description} ${lm.fullDescription} ${lm.address}',
       );
+      final aliasBlob = _normalizeSearchText(
+        '${lm.normalizedName} ${lm.aliases.join(' ')}',
+      );
       final lmCity = _normalizeSearchText(lm.city);
 
       var score = 0.0;
@@ -950,6 +2006,7 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       if (name == raw || name == q) score += 120;
       if (name.contains(raw) || raw.contains(name)) score += 45;
       if (desc.contains(raw)) score += 12;
+      if (aliasBlob.contains(raw) || aliasBlob.contains(q)) score += 38;
 
       final aliasScore = _aliasScore(raw, name);
       score += aliasScore * 40;
@@ -1061,13 +2118,25 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
     String? selectedCityName,
     required List<Landmark> existingResults,
   }) async {
-    final osm = await _fetchOsmTextSearchLandmark(
-      query: query,
-      rawQuery: rawQuery,
-      category: category,
-      cityName: selectedCityName,
-      existingResults: existingResults,
-    );
+    Landmark? osm;
+    try {
+      osm = await _fetchOsmTextSearchLandmark(
+        query: query,
+        rawQuery: rawQuery,
+        category: category,
+        cityName: selectedCityName,
+        existingResults: existingResults,
+      );
+    } on http.ClientException catch (e) {
+      _cooldownProvider('nominatim_osm|${_normalizeSearchText(rawQuery)}');
+      if (kDebugMode) {
+        debugPrint('[SearchEngine] Nominatim ClientException (named fallback): $e');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[SearchEngine] Nominatim error (named fallback): $e');
+      }
+    }
     if (osm != null) return osm;
 
     final wiki = await _fetchWikipediaLandmark(
@@ -1079,7 +2148,12 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
     );
     if (wiki != null) return wiki;
 
-    return null;
+    final cityHint = selectedCityName ?? _resolveCity(rawQuery, null);
+    return _geminiSuggestNamedPlace(
+      rawQuery: rawQuery,
+      cityHint: cityHint,
+      categoryHint: category,
+    );
   }
 
   Future<Landmark?> _fetchOsmTextSearchLandmark({
@@ -1089,6 +2163,13 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
     String? cityName,
     required List<Landmark> existingResults,
   }) async {
+    final coolKey = 'nominatim_osm|${_normalizeSearchText(rawQuery)}';
+    if (_isProviderCoolingDown(coolKey)) {
+      if (kDebugMode) {
+        debugPrint('[SearchEngine] skip Nominatim OSM (cooldown) $coolKey');
+      }
+      return null;
+    }
     try {
       // Do NOT force selected city here. Search across Egypt and use the
       // real city from OSM address/display_name for saving.
@@ -1277,6 +2358,12 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
 
       if (_containsEquivalent(existingResults, landmark)) return null;
       return landmark;
+    } on http.ClientException catch (e) {
+      _cooldownProvider(coolKey);
+      if (kDebugMode) {
+        debugPrint('[SearchEngine] OSM text Nominatim ClientException: $e');
+      }
+      return null;
     } catch (e) {
       print('[SearchEngine] OSM text fallback error: $e');
       return null;
@@ -1476,6 +2563,23 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
 
       final cleanProviderName = _normalizeGeneratedBusinessName(place.name);
 
+      var heroUrl = place.imageUrl.trim();
+      if (heroUrl.isNotEmpty) {
+        final owners = await _firebase.findLandmarkIdsWithImageUrl(heroUrl);
+        if (owners.isNotEmpty) {
+          heroUrl = '';
+        } else if (!_images.validateImageCandidateForPlace(
+          url: heroUrl,
+          metaText:
+              '$cleanProviderName $resolvedCity $category ${place.address} ${place.types.join(" ")} $heroUrl',
+          placeName: cleanProviderName,
+          cityName: resolvedCity,
+          category: category,
+        )) {
+          heroUrl = '';
+        }
+      }
+
       final landmark = Landmark(
         id: '',
         name: cleanProviderName,
@@ -1488,8 +2592,8 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
             : '$category in $resolvedCity',
         fullDescription: '',
         history: '',
-        imageUrl: place.imageUrl.trim(),
-        mediaUrls: place.imageUrl.trim().isNotEmpty ? [place.imageUrl.trim()] : const [],
+        imageUrl: heroUrl,
+        mediaUrls: heroUrl.isNotEmpty ? [heroUrl] : const [],
         lat: place.lat,
         lng: place.lng,
         address: place.address.trim().isNotEmpty ? place.address.trim() : resolvedCity,
@@ -1514,7 +2618,12 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       );
 
       if (saveResults) {
-        final saved = await _safePersistAndReturn(landmark);
+        final saved = await _safePersistAndReturn(
+          landmark,
+          rawQuery: rawQuery,
+          markGenerated: true,
+          relaxNameRelevance: true,
+        );
         generated.add(saved ?? landmark);
       } else {
         // Category searches need to return many results fast. Saving every
@@ -1561,13 +2670,22 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
           'limit': '${math.max(maxResults * 5, 50)}',
         });
 
-        final res = await http.get(
-          uri,
-          headers: const {
-            'Accept': 'application/json',
-            'User-Agent': 'GeoGuideApp/1.0 (student-graduation-project)',
-          },
-        ).timeout(const Duration(seconds: 8));
+        late final http.Response res;
+        try {
+          res = await http.get(
+            uri,
+            headers: const {
+              'Accept': 'application/json',
+              'User-Agent': 'GeoGuideApp/1.0 (student-graduation-project)',
+            },
+          ).timeout(const Duration(seconds: 8));
+        } on http.ClientException catch (e) {
+          _cooldownProvider('nominatim_cat|${_normalizeSearchText(queryText)}');
+          if (kDebugMode) {
+            debugPrint('[SearchEngine] category Nominatim ClientException: $e');
+          }
+          continue;
+        }
 
         if (res.statusCode != 200) {
           print('[SearchEngine] category Nominatim status=${res.statusCode} query=$queryText');
@@ -1691,7 +2809,12 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
           final key = _equivalenceKey(landmark);
           if (!seen.add(key)) continue;
 
-          final saved = await _safePersistAndReturn(landmark);
+          final saved = await _safePersistAndReturn(
+            landmark,
+            rawQuery: rawQuery,
+            markGenerated: true,
+            relaxNameRelevance: true,
+          );
           generated.add(saved ?? landmark);
         }
       }
@@ -2097,7 +3220,14 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       r'\b(outing|park|garden|zoo|aquarium|mall|shopping|cinema|theater|theatre|stadium|amusement|beach|coast|corniche|island|oasis|leisure|natural|recreation|entertainment|playground)\b',
     ).hasMatch(text) ||
         RegExp(r'(خروجات|فسح|فسحه|ترفيه|حديقه|حدائق|شاطئ|ساحل|كورنيش|جزيره|واحه|مول|سينما|ملاهي|تسوق)').hasMatch(text)) {
-      return 'outing';
+      if (isVerifiedVisitorOutingCandidate(
+        name: name,
+        displayName: displayName,
+        osmClass: osmClass,
+        osmType: osmType,
+      )) {
+        return 'outing';
+      }
     }
 
     // OSM sometimes marks valid famous areas as place/neighbourhood without a
@@ -2113,6 +3243,32 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
     }
 
     return null;
+  }
+
+  bool isVerifiedVisitorOutingCandidate({
+    required String name,
+    required String displayName,
+    required String osmClass,
+    required String osmType,
+  }) {
+    final text = _normalizeSearchText('$name $displayName $osmClass $osmType');
+    if (text.isEmpty) return false;
+
+    final kind = _normalizeSearchText('$osmClass $osmType');
+    final hasOutingSignal = _textMatchesRequestedCategory(text, 'outing');
+    final kindMatches = _osmKindMatchesRequestedCategory(kind, 'outing');
+    if (!hasOutingSignal && !kindMatches) return false;
+
+    final isRoadOrAreaOnly = RegExp(
+      r'\b(highway|road|residential|service|tertiary|secondary|primary|street|place|neighbourhood|neighborhood|suburb|quarter|administrative|locality)\b',
+    ).hasMatch(text);
+    if (isRoadOrAreaOnly &&
+        !RegExp(r'\b(park|garden|zoo|aquarium|mall|shopping|cinema|theater|theatre|stadium|amusement|beach|coast|corniche|island|oasis|playground)\b')
+            .hasMatch(text)) {
+      return false;
+    }
+
+    return true;
   }
 
   bool _textMatchesRequestedCategory(String text, String category) {
@@ -2405,11 +3561,18 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
   //  PERSISTENCE
   // ════════════════════════════════════════════════════════
 
-  Future<Landmark?> _safePersistAndReturn(Landmark landmark) async {
+  Future<Landmark?> _safePersistAndReturn(
+    Landmark landmark, {
+    required String rawQuery,
+    bool markGenerated = false,
+    bool relaxNameRelevance = false,
+  }) async {
     try {
       if (landmark.name.trim().isEmpty) return null;
       if (landmark.city.trim().isEmpty || landmark.city.trim().toLowerCase() == 'egypt') {
-        print('[SearchEngine] persist skipped: invalid city for ${landmark.name}');
+        if (kDebugMode) {
+          debugPrint('[SearchEngine] persist skipped: invalid city for ${landmark.name}');
+        }
         return null;
       }
       if (_isBlockedNonPlaceResult(
@@ -2417,25 +3580,173 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
         displayName: '${landmark.description} ${landmark.address}',
         category: landmark.category,
       )) {
-        print('[SearchEngine] persist skipped non-place: ${landmark.name}');
+        if (kDebugMode) {
+          debugPrint('[SearchEngine] persist skipped non-place: ${landmark.name}');
+        }
         return null;
+      }
+
+      final outingCat = PlaceCategoryNormalizer.normalize(
+        landmark.category,
+        contextText: landmark.name,
+      );
+      if (outingCat == 'outing' &&
+          !PlaceSearchPipeline.isVerifiedVisitorOutingLandmark(landmark)) {
+        if (kDebugMode) {
+          debugPrint('[SearchEngine] persist skipped outing verification: ${landmark.name}');
+        }
+        return null;
+      }
+
+      if (!relaxNameRelevance) {
+        final sem = SemanticScorer.scoreSingle(query: rawQuery, landmark: landmark);
+        final fuzzy = _looseNameScore(landmark.name, rawQuery);
+        if (sem.score < 3.2 && fuzzy < 0.42) {
+          if (kDebugMode) {
+            debugPrint(
+              '[SearchEngine] persist skipped weak name match: ${landmark.name} '
+              'semantic=${sem.score.toStringAsFixed(1)} fuzzy=${fuzzy.toStringAsFixed(2)}',
+            );
+          }
+          return null;
+        }
       }
 
       final canonicalName = _canonicalEnglishNameFromText(
         '${landmark.name} ${landmark.description} ${landmark.shortDescription} ${landmark.address} ${landmark.wikipediaUrl ?? ''}',
       );
-      final landmarkToSave = canonicalName == null
+      var base = canonicalName == null
           ? landmark
           : landmark.copyWith(name: canonicalName);
 
-      final id = await _firebase.saveLandmark(landmarkToSave);
-      final saved = landmarkToSave.copyWith(id: id);
-      _cache.merge(saved);
+      base = PlaceSearchPipeline.prepareLandmarkForPersist(
+        base,
+        rawQuery: rawQuery,
+        generatedBySearch: markGenerated,
+      );
+
+      if (!PlaceSearchPipeline.validatePlaceForFirebaseSave(base)) {
+        PlaceSearchPipeline.debugLog(
+          'persist skipped validation name=${base.name} city=${base.city} cat=${base.category}',
+        );
+        return null;
+      }
+
+      final id = await _firebase.saveLandmark(base);
+
+      // Always return the canonical Firestore document after persistence.
+      // saveLandmark may merge into an existing admin-edited document by
+      // name/city. Returning the raw generated/provider landmark here can make
+      // search show a same-name item that is not the real Home/Admin document.
+      final fresh = await _firebase.getLandmarkById(id);
+      final saved = fresh ?? base.copyWith(id: id);
+
+      // Use put(), not merge(), because this is the canonical saved document
+      // for the current search result. Smart merge may keep older richer text
+      // and make the UI look stale after admin edits.
+      _cache.put(saved);
+      PlaceSearchPipeline.debugLog(
+        'persisted id=$id name=${saved.name} normalized=${saved.normalizedName} refetched=${fresh != null}',
+      );
       return saved;
     } catch (e) {
       print('[SearchEngine] persist failed for ${landmark.name}: $e');
       return null;
     }
+  }
+
+  bool _isTransientSearchResultId(String id) {
+    final clean = id.trim().toLowerCase();
+    if (clean.isEmpty) return true;
+    return clean.startsWith('local_seed_') ||
+        clean.startsWith('local_') ||
+        clean.startsWith('seed_') ||
+        clean.startsWith('overpass_') ||
+        clean.startsWith('nominatim_') ||
+        clean.startsWith('osm_') ||
+        clean.startsWith('wiki_') ||
+        clean.startsWith('provider_') ||
+        clean.startsWith('gemini_');
+  }
+
+  int _finalSearchCandidateScore(Landmark lm) {
+    var score = 0;
+    final id = lm.id.trim();
+
+    if (id.isNotEmpty && !_isTransientSearchResultId(id)) score += 10000;
+    if (lm.sources != null && (lm.sources!['lastAdminEditAt'] ?? '').toString().trim().isNotEmpty) {
+      score += 5000;
+    }
+    if (!lm.generatedBySearch) score += 1000;
+    if (lm.imageUrl.trim().startsWith('http')) score += 200;
+    score += lm.mediaUrls.where((u) => u.trim().startsWith('http')).length * 40;
+    score += lm.shortDescription.trim().length.clamp(0, 250);
+    score += lm.fullDescription.trim().length.clamp(0, 500);
+    score += (lm.rating * 10).round();
+    if (!lm.hidden && !lm.invalidPlace && !lm.isDuplicate) score += 100;
+    return score;
+  }
+
+  String _finalSearchVisibleKey(Landmark lm) {
+    final name = _normalizeSearchText(lm.name)
+        .replaceAll('&', 'and')
+        .replaceAll(RegExp(r'\b(the|of|el|al|egypt|cairo|giza)\b'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final cat = PlaceCategoryNormalizer.normalize(
+      lm.category,
+      contextText: '${lm.name} ${lm.shortDescription} ${lm.description}',
+    );
+
+    final text = _normalizeSearchText('${lm.name} ${lm.shortDescription} ${lm.fullDescription}');
+    final landmarkLike = cat == 'tourist' ||
+        cat == 'outing' ||
+        text.contains('citadel') ||
+        text.contains('museum') ||
+        text.contains('palace') ||
+        text.contains('temple');
+
+    if (landmarkLike) return name;
+    return '$name|$cat|${_normalizeSearchText(lm.city)}';
+  }
+
+  List<Landmark> _dedupeFinalSearchResults(List<Landmark> input) {
+    final byId = <String, Landmark>{};
+    final ordered = <Landmark>[];
+
+    for (final lm in input) {
+      if (lm.name.trim().isEmpty) continue;
+      final id = lm.id.trim();
+      if (id.isNotEmpty && !_isTransientSearchResultId(id)) {
+        final existing = byId[id];
+        if (existing == null) {
+          byId[id] = lm;
+          ordered.add(lm);
+        } else if (_finalSearchCandidateScore(lm) > _finalSearchCandidateScore(existing)) {
+          byId[id] = lm;
+          final idx = ordered.indexWhere((e) => e.id.trim() == id);
+          if (idx >= 0) ordered[idx] = lm;
+        }
+      } else {
+        ordered.add(lm);
+      }
+    }
+
+    final byVisible = <String, Landmark>{};
+    for (final lm in ordered) {
+      final key = _finalSearchVisibleKey(lm);
+      if (key.isEmpty) continue;
+      final existing = byVisible[key];
+      if (existing == null ||
+          _finalSearchCandidateScore(lm) > _finalSearchCandidateScore(existing)) {
+        byVisible[key] = lm;
+      }
+    }
+
+    final result = byVisible.values.toList();
+    result.sort((a, b) =>
+        _finalSearchCandidateScore(b).compareTo(_finalSearchCandidateScore(a)));
+    return result;
   }
 
   // ════════════════════════════════════════════════════════
@@ -2604,10 +3915,16 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
     return null;
   }
 
-  bool _isGenericCategoryQuery(String query, String category, String? cityName) {
+  bool _isGenericCategoryQuery(
+    String query,
+    String category,
+    String? cityName, {
+    String? cityIntent,
+  }) {
     final normalized = _normalizeSearchText(query);
     final city = _normalizeSearchText(cityName ?? '');
     final cityFromQuery = _normalizeSearchText(_resolveCity(query, null) ?? '');
+    final cityFromIntent = _normalizeSearchText(cityIntent ?? '');
 
     final tokensToRemove = <String>{
       ..._categoryWords(category),
@@ -2620,8 +3937,9 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       'داخل',
       'قريب',
       'قريبة',
-      if (city.isNotEmpty) ...city.split(' '),
-      if (cityFromQuery.isNotEmpty) ...cityFromQuery.split(' '),
+      if (city.isNotEmpty) ...city.split(' ').where((t) => t.length > 1),
+      if (cityFromQuery.isNotEmpty) ...cityFromQuery.split(' ').where((t) => t.length > 1),
+      if (cityFromIntent.isNotEmpty) ...cityFromIntent.split(' ').where((t) => t.length > 1),
     };
 
     final remaining = normalized
@@ -2650,7 +3968,14 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       case 'hotel':
         return {'hotel', 'hotels', 'resort', 'resorts', 'hostel', 'lodging', 'فندق', 'فنادق'};
       case 'outing':
-        return {'outing', 'outings', 'park', 'parks', 'garden', 'gardens', 'mall', 'malls', 'beach', 'beaches', 'cinema', 'خروجات', 'فسح'};
+        return {
+          'outing', 'outings', 'outing places', 'outing place', 'park', 'parks',
+          'garden', 'gardens', 'mall', 'malls', 'beach', 'beaches', 'cinema',
+          'marina', 'marinas', 'promenade', 'promenades', 'corniche', 'corniches',
+          'souk', 'souks', 'market', 'markets', 'bazaar', 'bazaars',
+          'entertainment', 'nightlife', 'places', 'place',
+          'خروجات', 'فسح',
+        };
       default:
         return {category};
     }
@@ -2665,7 +3990,13 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
       case 'cafe':
         return {'cafe', 'cafes', 'coffee', 'cafeteria', 'كافيه', 'كافيهات', 'كافتريا', 'كافيتريا', 'قهوة', 'مقهى'};
       case 'outing':
-        return {'outing', 'outings', 'park', 'parks', 'garden', 'mall', 'cinema', 'beach', 'coast', 'فسح', 'فسحة', 'خروجات', 'خروجة', 'حديقة', 'حدائق', 'مول', 'سينما', 'ساحل', 'شاطئ'};
+        return {
+          'outing', 'outings', 'outing places', 'place', 'places', 'park', 'parks',
+          'garden', 'gardens', 'mall', 'malls', 'cinema', 'beach', 'beaches', 'coast',
+          'marina', 'marinas', 'promenade', 'corniche', 'souk', 'souks', 'market',
+          'markets', 'bazaar', 'bazaars', 'entertainment', 'nightlife',
+          'فسح', 'فسحة', 'خروجات', 'خروجة', 'حديقة', 'حدائق', 'مول', 'سينما', 'ساحل', 'شاطئ',
+        };
       case 'tourist':
         return {
           'tourist', 'tourists', 'tourism', 'attraction', 'attractions', 'landmark',
@@ -2767,6 +4098,11 @@ bool _isKnownRegionLocalityForLocation(String text, String location) {
   String? _expectedCityForPlaceQuery(String query) {
     final q = _normalizeSearchText(query);
     if (q.isEmpty) return null;
+
+    final fromIntent = PlaceSearchPipeline.extractCityIntentFromQuery(query);
+    if (fromIntent != null && fromIntent.trim().isNotEmpty) {
+      return fromIntent.trim();
+    }
 
     // General rule:
     // Do NOT infer a city from a hardcoded place-name map.

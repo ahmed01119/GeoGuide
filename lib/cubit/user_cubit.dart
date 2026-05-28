@@ -169,15 +169,7 @@ final ChatbotService chatbotService = ChatbotService();
   Future<void> getLandmarksByCity(String cityId) async {
     emit(GetLandmarksByCityLoading());
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('landmarks')
-          .where('cityId', isEqualTo: cityId)
-          .get();
-
-      final landmarks = snapshot.docs
-          .map((doc) => Landmark.fromJson(doc.data(), doc.id))
-          .toList();
-
+      final landmarks = await firebaseService.getLandmarksByCity(cityId);
       emit(GetLandmarksByCitySuccess(landmarks: landmarks));
     } catch (e) {
       emit(
@@ -191,13 +183,7 @@ final ChatbotService chatbotService = ChatbotService();
   Future<void> getAllLandmarks() async {
     emit(GetAllLandmarksLoading());
     try {
-      final snapshot =
-          await FirebaseFirestore.instance.collection('landmarks').get();
-
-      final landmarks = snapshot.docs
-          .map((doc) => Landmark.fromJson(doc.data(), doc.id))
-          .toList();
-
+      final landmarks = await firebaseService.getAllLandmarks();
       emit(GetAllLandmarksSuccess(landmarks: landmarks));
     } catch (e) {
       emit(GetAllLandmarksFailure(errMessage: 'Failed to load landmarks'));
@@ -210,23 +196,35 @@ final ChatbotService chatbotService = ChatbotService();
   }) async {
     emit(GetPlacesLoading());
     try {
+      final cityObj = await firebaseService.getCityByName(city);
+      if (cityObj != null) {
+        final cleaned = await firebaseService.getLandmarksByCity(cityObj.id);
+        final categoryNorm = category?.trim().toLowerCase();
+        final filtered = categoryNorm == null || categoryNorm.isEmpty
+            ? cleaned
+            : cleaned
+                .where((lm) => lm.category.trim().toLowerCase() == categoryNorm)
+                .toList();
+
+        emit(GetPlacesSuccess(filtered));
+        return;
+      }
+
+      // Fallback (unknown city doc): keep old behavior but filter out
+      // invalid/hidden/duplicates in-memory.
       Query query = FirebaseFirestore.instance
           .collection('landmarks')
           .where('city', isEqualTo: city);
-
       if (category != null && category.trim().isNotEmpty) {
         query = query.where('category', isEqualTo: category);
       }
 
       final snapshot = await query.get();
-
       final places = snapshot.docs
-          .map(
-            (doc) =>
-                Landmark.fromJson(doc.data() as Map<String, dynamic>, doc.id),
-          )
+          .map((doc) =>
+              Landmark.fromJson(doc.data() as Map<String, dynamic>, doc.id))
+          .where((lm) => !lm.hidden && !lm.isDuplicate && !lm.invalidPlace)
           .toList();
-
       emit(GetPlacesSuccess(places));
     } catch (e) {
       emit(GetPlacesFailure(e.toString()));

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/presntation/place-info/place-info.dart';
@@ -49,18 +50,23 @@ class _FavoritesPageState extends State<FavoritesPage> {
         physics: const BouncingScrollPhysics(),
         slivers: [
           SliverAppBar(
-            expandedHeight: 250,
+            expandedHeight: 280,
+            toolbarHeight: 72,
             pinned: true,
             stretch: true,
             backgroundColor: AppColors.chestnutBrown,
+            systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
+              statusBarColor: AppColors.chestnutBrown,
+            ),
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(
                 bottom: Radius.circular(30),
               ),
             ),
             clipBehavior: Clip.antiAlias,
+            leadingWidth: 72,
             leading: Padding(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.only(left: 12, top: 8, bottom: 22),
               child: _GlassIconButton(
                 icon: Icons.arrow_back_ios_new_rounded,
                 onTap: () => Navigator.pop(context),
@@ -77,24 +83,24 @@ class _FavoritesPageState extends State<FavoritesPage> {
                         end: Alignment.bottomRight,
                         colors: [
                           AppColors.chestnutBrown,
+                          AppColors.chestnutBrown,
                         ],
                       ),
                     ),
                   ),
                   Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Colors.transparent,
-                            Colors.transparent,
-
-
-                            // AppColors.ivoryCream,
-                          ],
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.white.withOpacity(0.04),
+                              Colors.white.withOpacity(0.02),
+                              Colors.black.withOpacity(0.06),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -118,6 +124,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Container(
                                 padding: const EdgeInsets.symmetric(
@@ -153,6 +160,8 @@ class _FavoritesPageState extends State<FavoritesPage> {
                                 _favorites.isEmpty
                                     ? 'Start saving places you love and they will appear here.'
                                     : 'You have ${_favorites.length} saved place${_favorites.length > 1 ? 's' : ''}.',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   color: Colors.white.withOpacity(0.92),
                                   fontSize: 13.5,

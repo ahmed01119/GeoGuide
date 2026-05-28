@@ -42,7 +42,6 @@ class AppInjector {
     images: images,
     wikipedia: wikipedia,
     firebase: firebase,
-    nearby: nearby,
   );
 
   static PlacesCubit buildPlacesCubit() {

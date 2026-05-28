@@ -32,6 +32,7 @@ extension FirebaseNearbyCacheExtension on FirebaseService {
       'nearbyPlaces': cleaned,
       'nearbyUpdatedAt': FieldValue.serverTimestamp(),
       'nearbyUpdatedAtClient': DateTime.now().toIso8601String(),
+      'nearbyRefreshedAt': DateTime.now().toIso8601String(),
     }, SetOptions(merge: true));
   }
 

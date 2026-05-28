@@ -2,6 +2,7 @@ import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geoguide/constants/app_colors.dart';
 import 'package:geoguide/cubit/user_cubit.dart';
@@ -230,14 +231,24 @@ class _ChatBotPageState extends State<ChatBotPage> {
 
   SliverAppBar _buildSliverHeader() {
     return SliverAppBar(
-      expandedHeight: 220,
+      expandedHeight: 280,
+      toolbarHeight: 72,
       pinned: true,
       stretch: true,
       elevation: 0,
       backgroundColor: AppColors.chestnutBrown,
-      leadingWidth: 64,
+      systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: AppColors.chestnutBrown,
+      ),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          bottom: Radius.circular(30),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      leadingWidth: 72,
       leading: Padding(
-        padding: const EdgeInsets.only(left: 12, top: 6, bottom: 6),
+        padding: const EdgeInsets.only(left: 12, top: 8, bottom: 22),
         child: _GlassIconButton(
           icon: Icons.arrow_back_ios_new_rounded,
           onTap: () => Navigator.pop(context),
@@ -245,7 +256,7 @@ class _ChatBotPageState extends State<ChatBotPage> {
       ),
       actions: [
         Padding(
-          padding: const EdgeInsets.only(right: 12, top: 6, bottom: 6),
+          padding: const EdgeInsets.only(right: 12, top: 8, bottom: 22),
           child: _GlassActionButton(
             icon: Icons.add_comment_rounded,
             label: 'New Chat',
@@ -264,20 +275,24 @@ class _ChatBotPageState extends State<ChatBotPage> {
                   end: Alignment.bottomRight,
                   colors: [
                     AppColors.chestnutBrown,
+                    AppColors.chestnutBrown,
                   ],
                 ),
               ),
             ),
             Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withOpacity(0.05),
-                      Colors.black.withOpacity(0.12),
-                    ],
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.white.withOpacity(0.04),
+                        Colors.white.withOpacity(0.02),
+                        Colors.black.withOpacity(0.06),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -285,22 +300,23 @@ class _ChatBotPageState extends State<ChatBotPage> {
             Positioned(
               left: 16,
               right: 16,
-              bottom: 10,
+              bottom: 20,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(22),
+                borderRadius: BorderRadius.circular(24),
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.14),
-                      borderRadius: BorderRadius.circular(22),
+                      borderRadius: BorderRadius.circular(24),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.20),
+                        color: Colors.white.withOpacity(0.22),
                       ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -308,7 +324,7 @@ class _ChatBotPageState extends State<ChatBotPage> {
                             vertical: 6,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.14),
+                            color: Colors.white.withOpacity(0.16),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: const Text(
@@ -329,12 +345,16 @@ class _ChatBotPageState extends State<ChatBotPage> {
                               size: 18,
                             ),
                             SizedBox(width: 8),
-                            Text(
-                              'GeoGuide Assistant',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w800,
+                            Flexible(
+                              child: Text(
+                                'GeoGuide Assistant',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w800,
+                                ),
                               ),
                             ),
                           ],
@@ -342,6 +362,8 @@ class _ChatBotPageState extends State<ChatBotPage> {
                         const SizedBox(height: 8),
                         Text(
                           'Ask about destinations, restaurants, hotels, and travel tips across Egypt.',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: Colors.white.withOpacity(0.92),
                             fontSize: 13.5,

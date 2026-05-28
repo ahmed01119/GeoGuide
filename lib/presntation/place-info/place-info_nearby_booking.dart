@@ -19,6 +19,15 @@ part of 'place-info.dart';
 
 enum _NearbyFilter { all, attractions, hotels, dining, outing }
 
+/// Categories allowed for Overpass/Nominatim fetch (matches app place types).
+const List<String> _kNearbyFetchCategoriesAll = [
+  'hotel',
+  'restaurant',
+  'cafe',
+  'tourist',
+  'outing',
+];
+
 class _NearbyItem {
   final String name;
   final String category;
@@ -106,10 +115,6 @@ class _NearbyTabState extends State<_NearbyTab> {
 
     if (mounted) {
       setState(() => _loading = false);
-    }
-
-    if (_lat != 0 && _lng != 0) {
-      await _reloadFreeApis(forceRefresh: false);
     }
   }
 
@@ -208,7 +213,7 @@ class _NearbyTabState extends State<_NearbyTab> {
         lng: _lng,
         cityName: widget.place.city,
         existingPlaces: existing,
-        categories: _categoriesForFilter(_filter),
+        categories: _kNearbyFetchCategoriesAll,
         limit: 36,
         forceRefresh: forceRefresh,
       );
@@ -246,6 +251,20 @@ class _NearbyTabState extends State<_NearbyTab> {
         }
       });
     } catch (e) {
+      final id = widget.place.id.trim();
+      if (id.isNotEmpty) {
+        try {
+          final now = DateTime.now();
+          await widget.firebase.partialUpdate(id, {
+            'nearbyFailedAt': now.toIso8601String(),
+            'nearbyFailureReason': e.toString(),
+            'updatedAt': now.toIso8601String(),
+          });
+        } catch (_) {}
+      }
+      if (kDebugMode) {
+        debugPrint('[NearbyTab] reload error place=$id: $e');
+      }
       if (!mounted) return;
       setState(() {
         _statusMessage = _items.isNotEmpty
@@ -283,9 +302,13 @@ class _NearbyTabState extends State<_NearbyTab> {
         setState(() => _statusMessage = 'Nearby places saved for next time');
       }
 
-      print('[Nearby] cached ${places.length} nearby places for ${widget.place.name}');
+      if (kDebugMode) {
+        debugPrint('[Nearby] cached ${places.length} nearby places for ${widget.place.name}');
+      }
     } catch (e) {
-      print('[Nearby] cache save failed: $e');
+      if (kDebugMode) {
+        debugPrint('[Nearby] cache save failed: $e');
+      }
     } finally {
       _savingCache = false;
     }
@@ -462,21 +485,6 @@ class _NearbyTabState extends State<_NearbyTab> {
     if (famous.any(name.contains)) score += 4;
 
     return score;
-  }
-
-  List<String> _categoriesForFilter(_NearbyFilter filter) {
-    switch (filter) {
-      case _NearbyFilter.hotels:
-        return const ['hotel'];
-      case _NearbyFilter.dining:
-        return const ['restaurant', 'cafe'];
-      case _NearbyFilter.attractions:
-        return const ['tourist'];
-      case _NearbyFilter.outing:
-        return const ['outing'];
-      case _NearbyFilter.all:
-        return const ['hotel', 'restaurant', 'cafe', 'tourist', 'outing'];
-    }
   }
 
   String _mapCat(String raw) {

@@ -13,14 +13,15 @@
 
 // ignore_for_file: avoid_print
 
+import 'package:flutter/foundation.dart';
 import 'package:geoguide/core/place_category_normalizer.dart';
+import 'package:geoguide/core/place_search_pipeline.dart';
 import 'package:geoguide/models.dart/createCity_model.dart';
 import 'package:geoguide/models.dart/landmark_model.dart';
 import 'package:geoguide/services/Wikipedia%20service.dart';
 import 'package:geoguide/services/firebase_service.dart';
 import 'package:geoguide/services/image-service.dart';
 import 'package:geoguide/services/landmark_cache.dart';
-import 'package:geoguide/services/nearby-service.dart';
 import 'package:geoguide/services/place-validate.dart';
 import 'package:geoguide/services/places_service.dart';
 
@@ -31,7 +32,6 @@ class DataPipelineService {
   final ImageService _images;
   final WikipediaService _wikipedia;
   final FirebaseService _firebase;
-  final NearbyService _nearby;
   final LandmarkCache _cache = LandmarkCache.instance;
 
   DataPipelineService({
@@ -39,12 +39,10 @@ class DataPipelineService {
     ImageService? images,
     WikipediaService? wikipedia,
     FirebaseService? firebase,
-    NearbyService? nearby,
   })  : _placesService = googlePlaces ?? GooglePlacesService(),
         _images = images ?? ImageService(),
         _wikipedia = wikipedia ?? WikipediaService(),
-        _firebase = firebase ?? FirebaseService(),
-        _nearby = nearby ?? NearbyService();
+        _firebase = firebase ?? FirebaseService();
 
   // ════════════════════════════════════════════════════════
   //  MAIN ENTRY POINT
@@ -86,10 +84,6 @@ class DataPipelineService {
         for (final lm in valid) {
           if (!_cache.has(lm.id)) _cache.put(lm);
         }
-
-        // Keep enrichment non-blocking. If you want zero background API calls
-        // when cached data exists, comment this line.
-        _backgroundRefresh(valid, city, notify);
 
         return valid;
       }
@@ -167,11 +161,6 @@ class DataPipelineService {
       notify('Core save error: $e');
     }
 
-    // ── Nearby preload in the background ───────────────────
-    // Nearby is expensive; keep it non-blocking so the Home screen updates
-    // quickly. PlaceInfoScreen will still refresh a specific place on open.
-    _preloadNearbyInBackground(valid, notify);
-
     notify('Done! ${valid.length} places ready for "${city.name}"');
 
     final result = await _firebase.getLandmarksByCity(city.id);
@@ -180,99 +169,6 @@ class DataPipelineService {
       _cache.put(lm);
     }
     return validResult;
-  }
-
-  // ════════════════════════════════════════════════════════
-  //  BACKGROUND REFRESH (non-blocking)
-  // ════════════════════════════════════════════════════════
-
-  Future<void> _backgroundRefresh(
-    List<Landmark> cached,
-    City city,
-    PipelineProgressCallback notify,
-  ) async {
-    // This runs async — errors are swallowed
-    try {
-      bool changed = false;
-      final updated = <Landmark>[];
-
-      for (final lm in cached) {
-        Landmark current = lm;
-        bool dirty = false;
-
-        // Images refresh (14-day TTL)
-        if (_cache.needsImageRefresh(lm.id)) {
-          final fetched = await _images.fetchImages(
-            current.name,
-            cityName: current.city.trim().isNotEmpty ? current.city : city.name,
-            category: current.category,
-            count: 6,
-            excludeUrls: current.mediaUrls,
-          );
-
-          if (fetched.isNotEmpty) {
-            final merged = _mergeUrls(
-                current.imageUrl, current.mediaUrls, fetched);
-            if (merged.length > current.mediaUrls.length ||
-                (current.imageUrl.trim().isEmpty && merged.isNotEmpty)) {
-              current = current.copyWith(
-                imageUrl:
-                    merged.isNotEmpty ? merged.first : current.imageUrl,
-                mediaUrls: merged,
-                imagesRefreshedAt: DateTime.now(),
-                imagePipelineVersion: ImageService.imagePipelineVersion,
-                imagesAreFallback: false,
-              );
-              dirty = true;
-            }
-          }
-        }
-
-        // Wikipedia refresh (30-day TTL)
-        if (_cache.needsWikiRefresh(lm.id)) {
-          try {
-            final wiki = await _wikipedia.search(
-              current.name,
-              cityName: city.name,
-            );
-
-            if (wiki != null &&
-                PlaceValidator.isValidWikipediaResult(
-                  title: wiki.title,
-                  extract: wiki.fullText,
-                  description: wiki.summary,
-                )) {
-              final history =
-                  _wikipedia.extractHistorySection(wiki.fullText).trim();
-              current = current.copyWith(
-                shortDescription: wiki.summary.trim().isNotEmpty
-                    ? wiki.summary.trim()
-                    : current.shortDescription,
-                fullDescription: wiki.fullText.trim().isNotEmpty
-                    ? wiki.fullText.trim()
-                    : current.fullDescription,
-                history: history.isNotEmpty
-                    ? history
-                    : (wiki.fullText.isNotEmpty
-                        ? wiki.fullText
-                        : current.history),
-                wikipediaUrl: wiki.pageUrl,
-                wikiEnrichedAt: DateTime.now(),
-              );
-              dirty = true;
-            }
-          } catch (_) {}
-        }
-
-        if (dirty) changed = true;
-        updated.add(current);
-        if (dirty) _cache.merge(current);
-      }
-
-      if (changed) {
-        await _firebase.saveLandmarks(updated);
-      }
-    } catch (_) {}
   }
 
   // ════════════════════════════════════════════════════════
@@ -295,15 +191,37 @@ class DataPipelineService {
       final fetched = await Future.wait(
         batch.map((lm) async {
           try {
-            final urls = await _images.fetchImages(
+            final urlsRaw = await _images.fetchImages(
               lm.name,
+              displayName: PlaceSearchPipeline.displayTitle(lm),
               cityName: lm.city.trim().isNotEmpty ? lm.city : cityName,
               category: lm.category,
               count: 6,
               excludeUrls: lm.mediaUrls,
             );
+            final metaBase =
+                '${lm.name} ${lm.city.trim().isNotEmpty ? lm.city : cityName} '
+                '${PlaceCategoryNormalizer.normalize(lm.category, contextText: lm.name)}';
+            final urls = await _images.filterPersistableImageUrls(
+              urls: urlsRaw,
+              placeName: lm.name,
+              cityName: lm.city.trim().isNotEmpty ? lm.city : cityName,
+              category: lm.category,
+              metaTextBase: metaBase,
+              findOwnersForImageUrl: _firebase.findLandmarkIdsWithImageUrl,
+              excludeLandmarkId: lm.id.trim().isEmpty ? null : lm.id.trim(),
+              allowDuplicateOwnersForSamePlace: lm.id.trim().isEmpty
+                  ? null
+                  : (url, ownerIds) =>
+                      _firebase.imageOwnersAllowHeroSharingWithSubject(lm, ownerIds),
+            );
 
-            if (urls.isEmpty) return lm;
+            if (urls.isEmpty) {
+              if (urlsRaw.isNotEmpty && kDebugMode) {
+                debugPrint('[Pipeline] all fetched images rejected for ${lm.name}');
+              }
+              return lm;
+            }
 
             final merged = _mergeUrls(lm.imageUrl, lm.mediaUrls, urls);
             return lm.copyWith(
@@ -387,65 +305,6 @@ class DataPipelineService {
     }
 
     return result;
-  }
-
-  Future<void> _preloadNearbyInBackground(
-    List<Landmark> landmarks,
-    PipelineProgressCallback notify,
-  ) async {
-    try {
-      final candidates = landmarks
-          .where((lm) => lm.id.trim().isNotEmpty)
-          .where((lm) => lm.lat != 0 && lm.lng != 0)
-          .take(12)
-          .toList();
-
-      if (candidates.isEmpty) return;
-
-      notify('Preloading nearby for ${candidates.length} places in background…');
-
-      for (final lm in candidates) {
-        try {
-          final existing = lm.nearbyPlaces
-              .map((e) => NearbyPlace.fromJson(
-                    Map<String, dynamic>.from(e),
-                  ))
-              .toList();
-
-          final nearbyResult = await _nearby.getNearbyWithAutoRefresh(
-            lat: lm.lat,
-            lng: lm.lng,
-            existingPlaces: existing,
-            lastFetchedAt: lm.nearbyUpdatedAt,
-            categories: const [
-              'hotel',
-              'restaurant',
-              'cafe',
-              'tourist',
-              'outing',
-            ],
-            limit: 18, cityName: '',
-          );
-
-          if (nearbyResult.places.isEmpty) continue;
-
-          final updated = lm.copyWith(
-            nearbyPlaces: nearbyResult.places.map((p) => p.toJson()).toList(),
-            nearbyUpdatedAt: nearbyResult.refreshedAt ?? DateTime.now(),
-          );
-
-          _cache.merge(updated);
-          await _firebase.partialUpdate(updated.id, {
-            'nearbyPlaces': updated.nearbyPlaces,
-            'nearbyUpdatedAt': updated.nearbyUpdatedAt!.toIso8601String(),
-          });
-        } catch (e) {
-          print('[Pipeline] nearby preload error for ${lm.name}: $e');
-        }
-      }
-    } catch (e) {
-      print('[Pipeline] nearby background preload error: $e');
-    }
   }
 
   // ════════════════════════════════════════════════════════

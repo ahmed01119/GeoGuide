@@ -7,6 +7,79 @@ extension _HomeLogicSections on _HomeState {
   //  DATA LOADING
   // ════════════════════════════════════════════════════════
 
+  void _onAdminPlaceChanged(Landmark fresh) {
+    if (!mounted || fresh.id.trim().isEmpty) return;
+
+    final normalizedFresh = _withClearCardName(fresh);
+
+    List<Landmark> mergeInto(
+      List<Landmark> current, {
+      required String? cityName,
+      required bool onlyIfBelongsToSelectedCity,
+    }) {
+      if (onlyIfBelongsToSelectedCity && _selectedCity != null) {
+        if (!_landmarkMatchesCity(normalizedFresh, _selectedCity!)) {
+          return current;
+        }
+      }
+
+      var replaced = false;
+      final merged = <Landmark>[];
+
+      for (final item in current) {
+        if (_sameVisiblePlace(item, normalizedFresh)) {
+          if (!replaced) {
+            merged.add(normalizedFresh);
+            replaced = true;
+          }
+          continue;
+        }
+        merged.add(item);
+      }
+
+      if (!replaced && _isGoodHomeCardPlace(normalizedFresh)) {
+        merged.insert(0, normalizedFresh);
+      }
+
+      return _sortForHome(
+        _preferFirestoreOverSeeds(merged),
+        cityName: cityName,
+      );
+    }
+
+    setState(() {
+      _allLandmarks = mergeInto(
+        _allLandmarks,
+        cityName: null,
+        onlyIfBelongsToSelectedCity: false,
+      );
+
+      if (_selectedCity != null) {
+        _cityLandmarks = mergeInto(
+          _cityLandmarks,
+          cityName: _selectedCity!.name,
+          onlyIfBelongsToSelectedCity: true,
+        );
+      }
+
+      if (_searchActive) {
+        _searchResults = mergeInto(
+          _searchResults,
+          cityName: _selectedCity?.name,
+          onlyIfBelongsToSelectedCity: false,
+        );
+      }
+    });
+
+    if (kDebugMode) {
+      debugPrint(
+        '[HomeApplyAdminPlaceChange] id=${normalizedFresh.id} '
+        'name=${normalizedFresh.name} image=${normalizedFresh.imageUrl}',
+      );
+    }
+  }
+
+
   Future<void> _loadAllLandmarks() async {
     try {
       final all = await _repo.loadAll();
@@ -51,16 +124,9 @@ extension _HomeLogicSections on _HomeState {
         ));
       }
 
-      // Smart background generation:
-      // after showing stored places, generate only missing famous tourist/outing
-      // cards. This is guarded by a session key so it will not keep firing on
-      // every rebuild/dropdown change.
-      if (_shouldGenerateAllEgyptHighlights(storedOnly)) {
-        unawaited(Future<void>.delayed(
-          const Duration(milliseconds: 700),
-          _refreshAllEgyptInBackground,
-        ));
-      }
+      // Do not run broad "All Egypt" API generation on cold start; it is heavy
+      // and unrelated to the user's current city. City pages trigger their own
+      // guarded background fill when needed.
     } catch (e) {
       print('[Home] loadAll error: $e');
       if (mounted) {
@@ -69,51 +135,6 @@ extension _HomeLogicSections on _HomeState {
           _homeLoadFailed = true;
         });
       }
-    }
-  }
-
-  Future<void> _refreshAllEgyptInBackground() async {
-    const key = 'all_egypt_highlights';
-    if (!_homeBackgroundGenerationKeys.add(key)) {
-      print('[Home] skip duplicate background All Egypt generation');
-      return;
-    }
-
-    try {
-      print('[Home] background All Egypt highlights generation started');
-      final before = _prepareHomePlaces(_allLandmarks);
-      final generated = await _loadDefaultEgyptTopPlaces();
-      if (!mounted || generated.isEmpty) return;
-
-      final missingOnly = _onlyMissingPlaces(generated, before);
-      final valid = _touristAndOutingOnly(missingOnly);
-      if (valid.isEmpty) return;
-
-      unawaited(_persistHomePlacesInBackground(
-        valid,
-        reason: 'all_egypt_missing_highlights_generated',
-      ));
-
-      setState(() {
-        _allLandmarks = _sortForHome(
-          _prepareHomePlaces([..._allLandmarks, ...valid]),
-          cityName: null,
-        );
-        if (_selectedCity != null) {
-          final selected = _selectedCity!;
-          _cityLandmarks = _sortForHome(
-            _prepareHomePlaces([
-              ..._landmarksForCity(_cityLandmarks, selected),
-              ..._landmarksForCity(valid, selected),
-            ]),
-            cityName: selected.name,
-          );
-        }
-      });
-
-      print('[Home] background All Egypt highlights generation done: ${valid.length}');
-    } catch (e) {
-      print('[Home] background All Egypt generation error: $e');
     }
   }
 
@@ -191,12 +212,15 @@ extension _HomeLogicSections on _HomeState {
       // 3) Smart background generation. It runs only when famous tourist/outing
       // places are missing, and only once per city in this app session unless
       // forceRefresh=true.
-      if (forceRefresh || _shouldGenerateCityHighlights(storedCityPlaces, city)) {
-        unawaited(Future<void>.delayed(
-          const Duration(milliseconds: 750),
-          () => _refreshCityTouristPlacesInBackground(city, force: forceRefresh),
-        ));
-      }
+      // TEMP DEMO SAFE MODE:
+// Disable background generation before discussion to prevent wrong city data
+// and save Firebase quota.
+// if (forceRefresh || _shouldGenerateCityHighlights(storedCityPlaces, city)) {
+//   unawaited(Future<void>.delayed(
+//     const Duration(milliseconds: 750),
+//     () => _refreshCityTouristPlacesInBackground(city, force: forceRefresh),
+//   ));
+// }
     } catch (e) {
       print('[Home] loadCity error: $e');
       if (mounted) {
@@ -378,53 +402,82 @@ extension _HomeLogicSections on _HomeState {
     try {
       final result = await _search.searchPlaces(
         query: trimmed,
-        cityId: null,
-        cityName: null,
+        cityId: _selectedCity?.id,
+        cityName: _selectedCity?.name,
         maxResults: 12,
       );
 
       if (!mounted) return;
 
-      final localExact = _localExactMatchesForQuery(trimmed);
-
-      // Search must support all allowed categories:
-      // tourist, hotel, restaurant, cafe, outing.
-      // Do not restrict the exact searched results to tourist/outing only.
-      final exactResults = _filterAndDedup([
-        ...localExact,
-        ...result.results,
-      ]);
+      // Search must depend on Firebase/SearchEngine results only.
+      // If Firebase has no match, SearchEngine will generate/load the place.
+      // Do NOT fall back to local seeds here, because local_seed_* cards are
+      // not real Firebase docs and should not appear as search results.
+      final exactResults = _filterAndDedup(
+        _preferFirestoreOverSeeds([
+          ...result.results,
+        ]),
+      );
 
       final contextCity = _cityForSearch(
         detectedCity: result.detectedCity,
+        cityIntent: result.cityIntent,
         results: exactResults,
         query: trimmed,
       );
 
-      final localContext = contextCity == null
-          ? const <Landmark>[]
-          : _searchContextPlacesForCity(contextCity, exactResults);
+      final isCategorySearch = result.isGenericCategoryQuery;
 
-      final displayResults = _sortSearchResultsWithCityContext(
-        exactResults: exactResults,
-        contextPlaces: localContext,
-        query: trimmed,
-        city: contextCity,
-      );
+      final categoryExactResults = isCategorySearch
+          ? _onlySearchCategory(exactResults, result.detectedCategory)
+          : exactResults;
 
-      print(
-        '[Home] search display query="$trimmed" '
-        'exact=${exactResults.length} '
-        'context=${localContext.length} '
-        'display=${displayResults.length} '
-        'city=${contextCity?.name ?? 'unknown'}',
-      );
+      // Show city context only for named-place searches.
+      // Example: "Cairo Tower" => Cairo Tower + tourist/outing places.
+      // Category searches like "cafes in Cairo" must show only cafes.
+      final shouldShowCityContext =
+          !isCategorySearch && contextCity != null && categoryExactResults.isNotEmpty;
 
-      if (exactResults.isNotEmpty) {
-        // Save the exact searched places even if they are hotel/restaurant/cafe.
-        // City context remains tourist/outing highlights.
+      final localContext = shouldShowCityContext
+          ? _searchContextPlacesForCity(contextCity, categoryExactResults)
+          : const <Landmark>[];
+
+      final displayResults = shouldShowCityContext
+          ? _sortSearchResultsWithCityContext(
+              exactResults: categoryExactResults,
+              contextPlaces: localContext,
+              query: trimmed,
+              city: contextCity,
+            )
+          : (_filterAndDedup(categoryExactResults)
+                ..sort(
+                  (a, b) =>
+                      _searchCardScore(b).compareTo(_searchCardScore(a)),
+                ))
+              .take(12)
+              .toList();
+
+      if (kDebugMode) {
+        debugPrint(
+          '[Home] search query="$trimmed" '
+          'exact=${categoryExactResults.length} '
+          'context=${localContext.length} '
+          'display=${displayResults.length} '
+          'showCityContext=$shouldShowCityContext '
+          'isCategorySearch=$isCategorySearch '
+          'city=${contextCity?.name ?? 'unknown'}',
+        );
+      }
+
+      final persistableExactResults =
+          categoryExactResults.where((lm) => !_isLocalSeedPlace(lm)).toList();
+      final persistablePlaces = _filterAndDedup(persistableExactResults);
+
+      if (persistablePlaces.isNotEmpty) {
+        // Save only the real results of the submitted search.
+        // Do not persist local seeds or city-context cards from this flow.
         unawaited(_persistHomePlacesInBackground(
-          _filterAndDedup([...exactResults, ...localContext]),
+          persistablePlaces,
           defaultCity: contextCity,
           reason: 'search_saved_to_real_city_${_normalizeCityText(trimmed)}',
         ));
@@ -460,16 +513,18 @@ extension _HomeLogicSections on _HomeState {
         }
       });
 
-      if (contextCity != null &&
-          _searchContextPlacesForCity(contextCity, exactResults).length < 6) {
+      if (shouldShowCityContext &&
+          _searchContextPlacesForCity(contextCity, categoryExactResults).length < 6) {
         unawaited(_refreshSearchCityContextInBackground(
           city: contextCity,
-          exactResults: exactResults,
+          exactResults: categoryExactResults,
           query: trimmed,
         ));
       }
     } catch (e) {
-      print('[Home] search error: $e');
+      if (kDebugMode) {
+        debugPrint('[Home] search error: $e');
+      }
       if (mounted) {
         setState(() {
           _searchResults = [];
@@ -477,6 +532,28 @@ extension _HomeLogicSections on _HomeState {
         });
       }
     }
+  }
+
+  List<Landmark> _onlySearchCategory(
+    List<Landmark> items,
+    String? category,
+  ) {
+    final normalizedCategory = PlaceCategoryNormalizer.normalize(
+      category ?? '',
+    );
+
+    if (normalizedCategory.trim().isEmpty ||
+        !PlaceCategoryNormalizer.allowed.contains(normalizedCategory)) {
+      return _filterAndDedup(items);
+    }
+
+    return _filterAndDedup(items).where((lm) {
+      final cat = PlaceCategoryNormalizer.normalize(
+        lm.category,
+        contextText: '${lm.name} ${lm.shortDescription} ${lm.description}',
+      );
+      return cat == normalizedCategory;
+    }).toList();
   }
 
   List<Landmark> _localExactMatchesForQuery(String query) {
@@ -548,12 +625,12 @@ extension _HomeLogicSections on _HomeState {
 
   City? _cityForSearch({
     String? detectedCity,
+    String? cityIntent,
     required List<Landmark> results,
     required String query,
   }) {
-    // Query text wins over stale cached results.
-    final fromQuery = _cityFromKnownPlaceText(query);
-    if (fromQuery != null) return fromQuery;
+    final fromIntent = _findCityByName(cityIntent);
+    if (fromIntent != null) return fromIntent;
 
     final fromDetected = _findCityByName(detectedCity);
     if (fromDetected != null) return fromDetected;
@@ -577,74 +654,15 @@ extension _HomeLogicSections on _HomeState {
     return null;
   }
 
-  City? _cityFromKnownPlaceText(String raw) {
-    final text = _normalizeCityText(raw);
-
-    if (text.contains('pyramid') ||
-        text.contains('pyramids') ||
-        text.contains('sphinx') ||
-        text.contains('giza') ||
-        text.contains('grand egyptian museum') ||
-        text.contains('اهرام') ||
-        text.contains('أهرام') ||
-        text.contains('الهرم') ||
-        text.contains('ابو الهول') ||
-        text.contains('أبو الهول')) {
-      return _findCityByName('Giza');
-    }
-
-    if (text.contains('egyptian museum') &&
-        !text.contains('grand egyptian museum')) {
-      return _findCityByName('Cairo');
-    }
-
-    if (text.contains('cairo tower') ||
-        text.contains('khan') ||
-        text.contains('khalili') ||
-        text.contains('citadel of cairo') ||
-        text.contains('abdeen')) {
-      return _findCityByName('Cairo');
-    }
-
-    if (text.contains('luxor') ||
-        text.contains('karnak') ||
-        text.contains('valley of the kings') ||
-        text.contains('king valley') ||
-        text.contains('valley kings') ||
-        text.contains('hatshepsut') ||
-        text.contains('الدير البحري') ||
-        text.contains('وادي الملوك') ||
-        text.contains('وادى الملوك')) {
-      return _findCityByName('Luxor');
-    }
-
-    if (text.contains('aswan') ||
-        text.contains('abu simbel') ||
-        text.contains('philae') ||
-        text.contains('edfu') ||
-        text.contains('kom ombo')) {
-      return _findCityByName('Aswan');
-    }
-
-    if (text.contains('alexandria') ||
-        text.contains('qaitbay') ||
-        text.contains('bibliotheca') ||
-        text.contains('montaza') ||
-        text.contains('montazah')) {
-      return _findCityByName('Alexandria');
-    }
-
-    return null;
-  }
-
   List<Landmark> _searchContextPlacesForCity(
     City city,
     List<Landmark> exactResults,
   ) {
+    // In search mode, do not use local seeds for context.
+    // Context should come only from Firebase / already generated real places.
     final context = _touristAndOutingOnly([
       ..._landmarksForCity(_allLandmarks, city),
       ..._landmarksForCity(_cityLandmarks, city),
-      ..._localSeedPlacesForCity(city.name),
     ]);
 
     final exactKeys = exactResults.map(_placeIdentityKey).toSet();
@@ -887,9 +905,10 @@ extension _HomeLogicSections on _HomeState {
             '${_normalizeCityText(place.name)}|$normalizedCategory|${_normalizeCityText(place.city)}';
         if (!seen.add(key)) continue;
 
-        final cityForPlace = _cityForLandmark(place, defaultCity: defaultCity);
+        final cityForPlace = defaultCity ?? _cityForLandmark(place, defaultCity: defaultCity);
         final cityId = cityForPlace?.id ?? place.cityId;
         final cityName = cityForPlace?.name ?? place.city;
+        final now = DateTime.now();
 
         final toSave = place.copyWith(
           // local/temporary UI ids must not be used as Firestore ids.
@@ -898,6 +917,8 @@ extension _HomeLogicSections on _HomeState {
               : place.id,
           cityId: cityId,
           city: cityName.trim().isNotEmpty ? cityName : place.city,
+          createdAt: place.createdAt ?? now,
+          updatedAt: now,
         );
 
         final id = await _repo.save(toSave);
@@ -925,17 +946,61 @@ extension _HomeLogicSections on _HomeState {
       });
 
       print('[Home] persist background done: $reason saved=${saved.length}');
+
+      // Refresh Home memory after saving generated/search results so the UI
+      // and the next search can see newly persisted places quickly instead of
+      // waiting for older in-memory lists.
+      unawaited(_loadAllLandmarks());
+
+      if (defaultCity != null && saved.isNotEmpty) {
+        try {
+          final verify = await _repo.loadCity(defaultCity.id);
+          final homeVisible = _landmarksForCity(
+            _prepareHomePlaces(verify),
+            defaultCity,
+          ).length;
+          print(
+            '[Home] persist verify cityId=${defaultCity.id} cityName=${defaultCity.name} '
+            'saved=${saved.length} cityQueryRaw=${verify.length} homeVisible=$homeVisible',
+          );
+          if (saved.isNotEmpty && homeVisible == 0) {
+            print(
+              '[Home] persist verify mismatch: same query the city page uses returned '
+              'no home-visible rows. Example saved.cityId=${saved.first.cityId} '
+              'saved.city="${saved.first.city}" (repo may filter empty/Egypt-only city text).',
+            );
+          }
+          if (!mounted) return;
+          setState(() {
+            _allLandmarks = _sortForHome(
+              _prepareHomePlaces([...verify, ..._allLandmarks]),
+              cityName: null,
+            );
+            if (_selectedCity?.id == defaultCity.id) {
+              _cityLandmarks = _sortForHome(
+                _prepareHomePlaces([
+                  ..._landmarksForCity(_cityLandmarks, defaultCity),
+                  ..._landmarksForCity(verify, defaultCity),
+                ]),
+                cityName: defaultCity.name,
+              );
+            }
+          });
+        } catch (e) {
+          print('[Home] persist verify error: $e');
+        }
+      }
     } catch (e) {
       print('[Home] persist background error for $reason: $e');
     }
   }
 
   City? _cityForLandmark(Landmark place, {City? defaultCity}) {
-    final hardCity = _cityFromKnownPlaceText(
-      '${place.name} ${place.city} ${place.address} ${place.shortDescription} ${place.description}',
-    );
-
-    if (hardCity != null) return hardCity;
+    final canonicalCity = _canonicalCityForHomePlace(place);
+    if (canonicalCity.isNotEmpty) {
+      final canonical = _findCityByName(canonicalCity);
+      if (canonical != null) return canonical;
+    }
 
     if (defaultCity != null && _landmarkMatchesCity(place, defaultCity)) {
       return defaultCity;
@@ -1168,11 +1233,13 @@ extension _HomeLogicSections on _HomeState {
     if (_selectedCity != null) {
       final selected = _selectedCity!;
       final cityPlaces = _touristAndOutingOnly(
-        _filterAndDedup([
-          ..._landmarksForCity(_cityLandmarks, selected),
-          ..._landmarksForCity(_allLandmarks, selected),
-          ..._localSeedPlacesForCity(selected.name),
-        ]),
+        _filterAndDedup(
+          _preferFirestoreOverSeeds([
+            ..._landmarksForCity(_cityLandmarks, selected),
+            ..._landmarksForCity(_allLandmarks, selected),
+            ..._localSeedPlacesForCity(selected.name),
+          ]),
+        ),
       );
       cityPlaces.sort((a, b) => _cityDisplayScore(b, selected.name)
           .compareTo(_cityDisplayScore(a, selected.name)));
@@ -1191,10 +1258,12 @@ extension _HomeLogicSections on _HomeState {
     // Top Places must show ONLY tourist + outing places across Egypt.
     // This also allows places like Cairo Zoo / gardens / parks to appear,
     // while preventing hotels/restaurants/cafes from entering the carousel.
-    final filtered = _touristAndOutingOnly([
-      ...source,
-      ..._localEgyptSeedPlaces(),
-    ]);
+    final filtered = _touristAndOutingOnly(
+      _preferFirestoreOverSeeds([
+        ...source,
+        ..._localEgyptSeedPlaces(),
+      ]),
+    );
 
     filtered.sort((a, b) {
       final famousCompare =
@@ -1296,8 +1365,72 @@ extension _HomeLogicSections on _HomeState {
 
 
 
+
+  bool _isLocalSeedPlace(Landmark lm) {
+    return lm.id.trim().toLowerCase().startsWith('local_seed_');
+  }
+
+  String _visibleHomeKey(Landmark lm) {
+    final name = _dedupeNameKey(_clearDisplayName(lm.name));
+    final cat = PlaceCategoryNormalizer.normalize(
+      lm.category,
+      contextText: '${lm.name} ${lm.shortDescription} ${lm.description}',
+    );
+    return '$name|$cat';
+  }
+
+  bool _sameVisiblePlace(Landmark a, Landmark b) {
+    final aId = a.id.trim();
+    final bId = b.id.trim();
+    if (aId.isNotEmpty && bId.isNotEmpty && aId == bId) return true;
+    return _visibleHomeKey(a) == _visibleHomeKey(b);
+  }
+
+  bool _shouldUseIncomingHomeCandidate(Landmark existing, Landmark incoming) {
+    final existingSeed = _isLocalSeedPlace(existing);
+    final incomingSeed = _isLocalSeedPlace(incoming);
+
+    // A real Firebase document must always replace a local seed card for the
+    // same visible place. This fixes cases like local_seed_citadel of cairo
+    // staying on Home while the real Firestore document was edited.
+    if (existingSeed && !incomingSeed) return true;
+    if (!existingSeed && incomingSeed) return false;
+
+    return _placeScore(incoming) > _placeScore(existing);
+  }
+
+  String _searchVisiblePlaceKey(Landmark lm) {
+    final name = _dedupeNameKey(_clearDisplayName(lm.name));
+    if (name.isEmpty) return '';
+
+    final cat = PlaceCategoryNormalizer.normalize(
+      lm.category,
+      contextText: '${lm.name} ${lm.shortDescription} ${lm.description}',
+    );
+
+    if (cat == 'tourist' || cat == 'outing') return name;
+    return '$name|$cat|${_normalizeCityText(lm.city)}';
+  }
+
+  List<Landmark> _preferFirestoreOverSeeds(List<Landmark> items) {
+    final byKey = <String, Landmark>{};
+
+    for (final lm in items) {
+      if (lm.name.trim().isEmpty) continue;
+      final key = _visibleHomeKey(lm);
+      if (key.trim().isEmpty || key == '|') continue;
+
+      final existing = byKey[key];
+      if (existing == null || _shouldUseIncomingHomeCandidate(existing, lm)) {
+        byKey[key] = lm;
+      }
+    }
+
+    return byKey.values.toList();
+  }
+
   List<Landmark> _prepareHomePlaces(List<Landmark> items) {
-    final cleaned = _filterAndDedup(items)
+    final cleaned = _filterAndDedup(_preferFirestoreOverSeeds(items))
         .where(_isGoodHomeCardPlace)
         .map(_withClearCardName)
         .toList();
@@ -1484,62 +1617,206 @@ extension _HomeLogicSections on _HomeState {
     );
   }
 
+  /// Strict city matching for Home/Top Places.
+  ///
+  /// The old matching used cityId and also searched the address/description.
+  /// That can keep a wrong card visible if Firestore saved an old/wrong cityId
+  /// or if the text contains another city name.
+  ///
+  /// This method first fixes famous/canonical places by name/coordinates, then
+  /// falls back to exact city fields. It does not change Firebase data.
   bool _landmarkMatchesCity(Landmark lm, City city) {
-    final cityName = _normalizeCityText(city.name);
-    if (cityName.isEmpty) return false;
+  final cityName = _normalizeCityText(city.name);
+  if (cityName.isEmpty) return false;
 
-    final hardCity = _cityFromKnownPlaceText(
-      '${lm.name} ${lm.city} ${lm.address} ${lm.shortDescription} ${lm.description}',
+  final name = _normalizeCityText(lm.name);
+  if (name.isEmpty) return false;
+
+  // Known places override Firebase mistakes
+  final knownCity = _knownCityForPlaceName(name);
+  if (knownCity != null) {
+    return knownCity == cityName;
+  }
+
+  final lmCity = _normalizeCityText(lm.city);
+  final address = _normalizeCityText(lm.address);
+  final text = _normalizeCityText(
+    '${lm.name} ${lm.city} ${lm.address} ${lm.shortDescription} ${lm.description}',
+  );
+
+  if (lmCity == cityName) return true;
+  if (address.contains(cityName)) return true;
+  if (text.contains(cityName)) return true;
+
+  // Use cityId only as a final fallback, not first
+  final cityId = city.id.trim();
+  if (cityId.isNotEmpty && lm.cityId.trim() == cityId) return true;
+
+  return false;
+}
+
+String? _knownCityForPlaceName(String normalizedName) {
+  const known = {
+    'cairo tower': 'cairo',
+    'egyptian museum': 'cairo',
+    'khan el khalili': 'cairo',
+    'khan el-khalili': 'cairo',
+    'citadel of cairo': 'cairo',
+    'abdeen palace': 'cairo',
+
+    'great pyramid of giza': 'giza',
+    'pyramids of giza': 'giza',
+    'great sphinx of giza': 'giza',
+    'grand egyptian museum': 'giza',
+
+    'luxor temple': 'luxor',
+    'karnak temple': 'luxor',
+    'valley of the kings': 'luxor',
+    'temple of hatshepsut': 'luxor',
+
+    'abu simbel temples': 'aswan',
+    'philae temple': 'aswan',
+    'temple of kom ombo': 'aswan',
+    'temple of edfu': 'aswan',
+
+    'bibliotheca alexandrina': 'alexandria',
+    'alexandria library': 'alexandria',
+    'citadel of qaitbay': 'alexandria',
+    'montaza palace': 'alexandria',
+  };
+
+  for (final entry in known.entries) {
+    final key = _normalizeCityText(entry.key);
+    if (normalizedName == key ||
+        normalizedName.contains(key) ||
+        key.contains(normalizedName)) {
+      return entry.value;
+    }
+  }
+
+  return null;
+}
+
+  String _canonicalCityForHomePlace(Landmark lm) {
+    final name = _normalizeCityText(_clearDisplayName(lm.name));
+    final text = _normalizeCityText(
+      '${lm.name} ${lm.city} ${lm.address} ${lm.shortDescription} ${lm.description} ${lm.fullDescription}',
     );
 
-    if (hardCity != null) {
-      return _normalizeCityText(hardCity.name) == cityName;
+    bool hasAny(List<String> words) {
+      return words.any((word) {
+        final w = _normalizeCityText(word);
+        return w.isNotEmpty && (name == w || name.contains(w) || text.contains(w));
+      });
     }
 
-    final cityId = city.id.trim();
-    if (cityId.isNotEmpty && lm.cityId.trim() == cityId) return true;
-
-    final lmCity = _normalizeCityText(lm.city);
-    final lmAddress = _normalizeCityText(lm.address);
-    final lmDescription = _normalizeCityText(
-      '${lm.shortDescription} ${lm.description} ${lm.fullDescription}',
-    );
-
-    if (lmCity == cityName) return true;
-    if (lmCity.isNotEmpty &&
-        (lmCity.contains(cityName) || cityName.contains(lmCity))) {
-      return true;
+    if (hasAny(const [
+      'great pyramid of giza',
+      'pyramids of giza',
+      'great sphinx of giza',
+      'sphinx of giza',
+      'grand egyptian museum',
+      'the pharaonic village',
+      'africa safari park',
+      'أهرامات الجيزة',
+      'اهرامات الجيزة',
+      'أبو الهول',
+      'ابو الهول',
+    ])) {
+      return 'giza';
     }
-    if (lmAddress.contains(cityName)) return true;
-    if (lmDescription.contains(cityName)) return true;
 
-    if (cityName == 'cairo') {
-      const cairoAreas = [
-        'cairo',
-        'downtown',
-        'zamalek',
-        'maadi',
-        'heliopolis',
-        'nasr city',
-        'new cairo',
-        'garden city',
-        'old cairo',
-        'islamic cairo',
-        'abdeen',
-        'المعادي',
-        'الزمالك',
-        'مصر الجديدة',
-        'مدينة نصر',
-        'القاهرة',
-        'القاهره',
-      ];
-      final combined = '$lmCity $lmAddress $lmDescription';
-      if (cairoAreas.any((area) => combined.contains(_normalizeCityText(area)))) {
-        return true;
+    if (hasAny(const [
+      'cairo tower',
+      'egyptian museum',
+      'khan el khalili',
+      'khan el-khalili',
+      'citadel of cairo',
+      'cairo citadel',
+      'abdeen palace',
+      'umm kulthum museum',
+      'naguib mahfouz museum',
+      'al azhar park',
+      'al-azhar park',
+      'cairo zoo',
+      'family park',
+      'برج القاهرة',
+      'برج القاهره',
+      'خان الخليلي',
+      'قلعة صلاح الدين',
+    ])) {
+      return 'cairo';
+    }
+
+    if (hasAny(const [
+      'valley of the kings',
+      'karnak temple',
+      'luxor temple',
+      'temple of hatshepsut',
+      'hatshepsut temple',
+      'luxor museum',
+      'وادي الملوك',
+      'وادى الملوك',
+      'الكرنك',
+      'معبد الأقصر',
+      'معبد الاقصر',
+    ])) {
+      return 'luxor';
+    }
+
+    if (hasAny(const [
+      'abu simbel temples',
+      'abu simbel',
+      'philae temple',
+      'kom ombo temple',
+      'temple of kom ombo',
+      'edfu temple',
+      'temple of edfu',
+      'aswan botanical garden',
+      'nubian museum',
+      'أبو سمبل',
+      'ابو سمبل',
+      'فيلة',
+      'فيله',
+    ])) {
+      return 'aswan';
+    }
+
+    if (hasAny(const [
+      'bibliotheca alexandrina',
+      'alexandria library',
+      'citadel of qaitbay',
+      'qaitbay citadel',
+      'montaza palace',
+      'montazah palace',
+      'catacombs of kom el shoqafa',
+      'stanley bridge',
+      'alexandria corniche',
+      'مكتبة الإسكندرية',
+      'مكتبة الاسكندرية',
+      'قلعة قايتباي',
+    ])) {
+      return 'alexandria';
+    }
+
+    if (hasAny(const ['siwa oasis', 'واحة سيوة', 'سيوة'])) {
+      return 'siwa';
+    }
+
+    // Coordinate fallback for generated docs whose city field is empty.
+    if (lm.lat != 0 && lm.lng != 0) {
+      if (lm.lat >= 29.90 && lm.lat <= 30.08 &&
+          lm.lng >= 31.05 && lm.lng <= 31.22) {
+        return 'giza';
+      }
+
+      if (lm.lat >= 29.90 && lm.lat <= 30.20 &&
+          lm.lng > 31.22 && lm.lng <= 31.45) {
+        return 'cairo';
       }
     }
 
-    return false;
+    return '';
   }
 
   String _normalizeCityText(String value) {
@@ -1550,17 +1827,6 @@ extension _HomeLogicSections on _HomeState {
         .replaceAll(RegExp(r'[^a-z0-9\u0600-\u06ff]+'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
-  }
-
-  bool _shouldGenerateAllEgyptHighlights(List<Landmark> stored) {
-    final key = 'all_egypt_highlights';
-    if (_homeBackgroundGenerationKeys.contains(key)) return false;
-
-    final touristOuting = _touristAndOutingOnly(stored);
-    if (touristOuting.length < 12) return true;
-
-    final famousScore = touristOuting.where((lm) => _famousEgyptScore(lm) > 0).length;
-    return famousScore < 10;
   }
 
   bool _shouldGenerateCityHighlights(List<Landmark> stored, City city) {
@@ -1630,7 +1896,7 @@ extension _HomeLogicSections on _HomeState {
       );
 
       final existing = byKey[key];
-      if (existing == null || _placeScore(candidate) > _placeScore(existing)) {
+      if (existing == null || _shouldUseIncomingHomeCandidate(existing, candidate)) {
         byKey[key] = candidate;
       }
     }
@@ -1737,41 +2003,41 @@ extension _HomeLogicSections on _HomeState {
   }
 
   Future<void> _openCamera() async {
-  try {
-    final XFile? image = await _picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 70,
-      maxWidth: 1200,
-      maxHeight: 1200,
-    );
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 70,
+        maxWidth: 1200,
+        maxHeight: 1200,
+      );
 
-    if (image == null) return;
+      if (image == null) return;
 
-    final AiImageDetails details =
-        await LandmarkImageAiService().describeImage(image);
+      final AiImageDetails details =
+          await LandmarkImageAiService().describeImage(image);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => AiImageDetailsScreen(
-          imageFile: image,
-          details: details,
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => AiImageDetailsScreen(
+            imageFile: image,
+            details: details,
+          ),
         ),
-      ),
-    );
-  } catch (e) {
-    debugPrint('Camera AI error: $e');
+      );
+    } catch (e) {
+      debugPrint('Camera AI error: $e');
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Image AI error: $e'),
-      ),
-    );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Image AI error: $e'),
+        ),
+      );
+    }
   }
-}
 }
 
